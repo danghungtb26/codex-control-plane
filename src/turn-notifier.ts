@@ -1,11 +1,22 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import type { CodexAppServerClient, TurnCompletedEvent } from "./codex-client.js";
 import type { DiscordNotificationTarget, DiscordNotifier } from "./discord-notifier.js";
 import type { GithubBindingRegistry, GithubReportReceipt } from "./github-binding-registry.js";
 
-type TurnContext = DiscordNotificationTarget;
+const execFileAsync = promisify(execFile);
+
+type TurnRegistration = DiscordNotificationTarget & {
+  cwd: string;
+};
+
+type TurnContext = TurnRegistration & {
+  commitBefore: Promise<string>;
+};
 
 const COMMENT_ID_RE = /^GITHUB_REPORT_COMMENT_ID=(\d+)$/m;
 const COMMENT_URL_RE = /^GITHUB_REPORT_COMMENT_URL=(https:\/\/github\.com\/[^\s]+#issuecomment-\d+)$/m;
+const TASK_SUMMARY_RE = /^CODEX_TASK_SUMMARY=(.+)$/m;
 
 const parseReportReceipt = (text: string): { commentId: string; commentUrl: string } | null => {
   const commentId = text.match(COMMENT_ID_RE)?.[1] ?? "";
@@ -17,6 +28,32 @@ const parseReportReceipt = (text: string): { commentId: string; commentUrl: stri
 const isInterrupted = (status: string) => {
   const normalized = status.toLowerCase();
   return normalized === "interrupted" || normalized === "cancelled";
+};
+
+const readGitHead = async (cwd: string) => {
+  try {
+    const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD"], { cwd });
+    return stdout.trim();
+  } catch {
+    return "";
+  }
+};
+
+const summaryFrom = (finalText: string) => {
+  const explicit = finalText.match(TASK_SUMMARY_RE)?.[1]?.trim();
+  if (explicit) return explicit;
+  return finalText
+    .split("\n")
+    .filter(
+      (line) =>
+        !line.startsWith("GITHUB_REPORT_COMMENT_ID=") &&
+        !line.startsWith("GITHUB_REPORT_COMMENT_URL=") &&
+        !line.startsWith("CODEX_TASK_SUMMARY="),
+    )
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 600);
 };
 
 export class TurnNotifier {
@@ -32,9 +69,12 @@ export class TurnNotifier {
     });
   }
 
-  register(turnId: string, context: TurnContext) {
+  register(turnId: string, context: TurnRegistration) {
     if (!turnId) return;
-    this.contexts.set(turnId, context);
+    this.contexts.set(turnId, {
+      ...context,
+      commitBefore: readGitHead(context.cwd),
+    });
   }
 
   private async resolveCodexReceipt(
@@ -70,11 +110,20 @@ export class TurnNotifier {
     if (!context) return;
     this.contexts.delete(event.turnId);
 
+    const [commitBefore, commitAfter] = await Promise.all([
+      context.commitBefore,
+      readGitHead(context.cwd),
+    ]);
+    const summary = summaryFrom(event.finalText);
+
     let receipt = await this.resolveCodexReceipt(context, event.finalText);
     if (!receipt && !isInterrupted(event.status)) {
       try {
         receipt = await this.github.postFallbackReport({
-          ...context,
+          repo: context.repo,
+          kind: context.kind,
+          number: context.number,
+          threadId: context.threadId,
           status: event.status,
           finalText: event.finalText,
           turnId: event.turnId,
@@ -87,9 +136,17 @@ export class TurnNotifier {
 
     try {
       await this.discord.sendCompletion({
-        ...context,
+        repo: context.repo,
+        kind: context.kind,
+        number: context.number,
+        threadId: context.threadId,
+        action: context.action,
+        request: context.request,
         turnId: event.turnId,
         status: event.status,
+        summary,
+        commitBefore,
+        commitAfter,
         reportCommentId: receipt?.commentId,
         reportCommentUrl: receipt?.commentUrl,
         reportFallback: receipt?.fallback,
