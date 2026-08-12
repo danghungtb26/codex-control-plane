@@ -31,7 +31,7 @@ const readInt = (name: string, fallback: number) => {
 
 const readPort = () => {
   const raw = process.env.PORT ?? process.env.ADMIN_PORT ?? process.env.WEBHOOK_PORT;
-  if (!raw) return 8788;
+  if (!raw) return 8787;
   const value = Number.parseInt(raw, 10);
   if (!Number.isFinite(value)) throw new Error("PORT must be an integer");
   return value;
