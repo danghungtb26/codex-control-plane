@@ -97,10 +97,10 @@ const webhookServer = createServer(async (req, res) => {
     }
 
     console.log(
-      `[github] accepted ${event} for ${message.repo} ${message.targetKind} #${message.number} from @${message.sender}`,
+      `[github] accepted /codex:${message.action} from ${event} for ${message.repo} ${message.targetKind} #${message.number} from @${message.sender}`,
     );
     dispatcher.enqueue(message);
-    return sendJson(res, 202, { ok: true, queued: true });
+    return sendJson(res, 202, { ok: true, queued: true, command: message.action });
   } catch (error) {
     console.error("[webhook] error:", error);
     return sendJson(res, 500, { error: (error as Error).message });
@@ -199,6 +199,9 @@ const adminServer = createServer(async (req, res) => {
           kind: "issue",
           number: issueNumber,
           threadId,
+          action: "implement",
+          request: message,
+          cwd,
         });
         return sendJson(res, 201, { binding, turn });
       }
@@ -222,6 +225,9 @@ const adminServer = createServer(async (req, res) => {
         kind: "pr",
         number: legacyPrNumber,
         threadId,
+        action: "manual",
+        request: message,
+        cwd,
       });
       return sendJson(res, 201, { binding, turn, legacyMode: true });
     }
@@ -248,7 +254,7 @@ const adminServer = createServer(async (req, res) => {
         const binding = await resolver.resolveIssue(repo, issueNumber);
         if (!binding) {
           return sendJson(res, 404, {
-            error: `no existing Codex thread found for issue #${issueNumber}; use /tasks or /codex on the Issue to create one first`,
+            error: `no existing Codex thread found for issue #${issueNumber}; use /tasks or /codex:implement on the Issue to create one first`,
           });
         }
 
@@ -261,6 +267,9 @@ const adminServer = createServer(async (req, res) => {
           kind: "issue",
           number: issueNumber,
           threadId: binding.threadId,
+          action: "manual",
+          request: message,
+          cwd: binding.cwd,
         });
         return sendJson(res, 202, { binding, turn });
       }
@@ -282,6 +291,9 @@ const adminServer = createServer(async (req, res) => {
         kind: "pr",
         number: prNumber,
         threadId: binding.threadId,
+        action: "manual",
+        request: message,
+        cwd: binding.cwd,
       });
       return sendJson(res, 202, { binding, turn });
     }
