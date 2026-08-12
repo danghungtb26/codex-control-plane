@@ -1,8 +1,14 @@
 import { spawn } from "node:child_process";
 import type { Binding, BindingKind, RemoteBindingMarker } from "./types.js";
 
-type IssueComment = { id: number; body?: string; user?: { login?: string } };
+type IssueComment = { id: number; body?: string; html_url?: string; user?: { login?: string } };
 type PullRequestInfo = { body?: string | null; head?: { ref?: string } };
+
+export type GithubReportReceipt = {
+  commentId: string;
+  commentUrl: string;
+  fallback: boolean;
+};
 
 const MARKER_RE = /<!--\s*codex-control-plane-binding\s+({[\s\S]*?})\s*-->/;
 
@@ -64,6 +70,48 @@ export class GithubBindingRegistry {
       return;
     }
     await run(this.ghBin, ["api", "-X", "POST", `repos/${binding.repo}/issues/${binding.number}/comments`, "-f", `body=${body}`]);
+  }
+
+  async postFallbackReport(input: {
+    repo: string;
+    kind: BindingKind;
+    number: number;
+    status: string;
+    finalText: string;
+    threadId: string;
+    turnId: string;
+  }): Promise<GithubReportReceipt> {
+    const target = input.kind === "pr" ? `PR #${input.number}` : `Issue #${input.number}`;
+    const result = input.finalText.trim() || `Codex turn finished with status: ${input.status}.`;
+    const body = [
+      `⚠️ **Control-plane fallback completion report**`,
+      "",
+      `Target: ${target}`,
+      `Status: ${input.status}`,
+      `Thread: \`${input.threadId}\``,
+      `Turn: \`${input.turnId}\``,
+      "",
+      "Codex did not return a valid GitHub completion-comment receipt, so the control plane posted this fallback report.",
+      "",
+      "### Codex final result",
+      result,
+    ].join("\n");
+
+    const raw = await run(this.ghBin, [
+      "api",
+      "-X",
+      "POST",
+      `repos/${input.repo}/issues/${input.number}/comments`,
+      "-f",
+      `body=${body}`,
+    ]);
+    const comment = JSON.parse(raw) as IssueComment;
+    const commentId = String(comment.id ?? "");
+    const commentUrl = String(comment.html_url ?? "");
+    if (!commentId || !commentUrl) {
+      throw new Error("GitHub fallback report was posted but its comment id/url could not be resolved");
+    }
+    return { commentId, commentUrl, fallback: true };
   }
 
   async discoverSourceIssues(repo: string, prNumber: number) {
