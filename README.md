@@ -1,115 +1,116 @@
 # Codex Control Plane (local POC)
 
-Flow:
+A local control plane that keeps one durable Codex conversation across a task's implementation and subsequent PR review/fix cycle.
 
 ```text
-ChatGPT / trusted GitHub reviewer
-        │ review / inline comment / /codex command
+GitHub Issue / new task
+        │
+        │ POST /tasks (issueNumber)
         ▼
-GitHub webhook
-        │ HTTPS tunnel
+new Codex thread
+        │
+        ├── local cache: .data/bindings.json
+        └── GitHub Issue hidden binding marker
+                │
+                │ implementation creates PR with `Closes #123`
+                ▼
+GitHub PR
+        │
+        │ review / /codex command / POST /send
         ▼
-localhost:8787/github/webhook
-        │ HMAC + allowlists
-        ▼
-PR -> Codex thread binding
+BindingResolver
+   1. local PR binding
+   2. GitHub PR marker
+   3. linked Issue marker (`Closes #123` or branch `issue/123`)
         │
         ▼
-Codex App Server (local)
-   active turn -> turn/steer
-   idle thread -> turn/start
+resume the SAME Codex thread
         │
         ▼
-local repo/worktree
+fix + tests + completion comment on PR
 ```
 
-## 1. Prerequisites
+## Core rule
 
-- Node.js 20+
+- **New Issue/task** => create a new Codex thread.
+- **Fix/review for an existing PR** => never silently create a new thread. Resolve and resume the original implementation thread.
+- GitHub comments are the durable thread registry; `.data/bindings.json` is only a local cache.
+
+The GitHub marker is stored as a hidden HTML comment. It contains the thread ID and relation metadata, but never the absolute local `cwd`.
+
+## Prerequisites
+
 - Codex CLI installed and authenticated
-- A local clone/worktree for the PR
-
-Check:
+- GitHub CLI (`gh`) installed and authenticated
+- Node.js 20+ or Bun
+- A local checkout/worktree for each managed repository
 
 ```bash
 codex --version
-codex app-server --help
+gh auth status
 ```
 
-## 2. Install
+## Install
 
 ```bash
-npm install
+bun install
 cp .env.example .env
 ```
 
-Generate a webhook secret, for example:
+Generate a webhook secret:
 
 ```bash
 openssl rand -hex 32
 ```
 
-Put it in `.env` as `GITHUB_WEBHOOK_SECRET`.
-
-Set narrow allowlists:
+Example config:
 
 ```env
+GITHUB_WEBHOOK_SECRET=...
 GITHUB_ALLOWED_REPOS=my-org/my-repo
-GITHUB_ALLOWED_SENDERS=my-github-login
+GITHUB_ALLOWED_SENDERS=my-login
+REPO_WORKSPACES=my-org/my-repo=/absolute/path/to/my-repo
+CODEX_ALLOW_NETWORK=true
 ```
+
+`REPO_WORKSPACES` is only needed when the local `.data/bindings.json` cache is missing and the control plane must recover a thread from GitHub. It maps a repository to the checkout/worktree that Codex should resume in.
+
+`CODEX_ALLOW_NETWORK=true` is required if Codex itself should push branches, create PRs, or post completion comments. The control plane's own GitHub binding registry uses local `gh api` independently.
 
 Start:
 
 ```bash
-npm run start
+bun run start
 ```
 
-You should see:
+## Start a NEW implementation task
 
-```text
-GitHub webhook: http://127.0.0.1:8787/github/webhook
-local admin API: http://127.0.0.1:8788
-```
-
-## 3. Create or bind a Codex thread to a PR
-
-### Option A — let the bridge create the Codex thread
+Use the GitHub Issue number as the task identity:
 
 ```bash
 curl -sS http://127.0.0.1:8788/tasks \
   -H 'content-type: application/json' \
   -d '{
     "repo": "my-org/my-repo",
-    "prNumber": 269,
-    "cwd": "/absolute/path/to/repo-or-worktree",
-    "message": "Inspect the current branch for PR #269. Understand the change and run the relevant tests. Do not merge."
+    "issueNumber": 245,
+    "cwd": "/absolute/path/to/my-repo",
+    "message": "Implement issue #245, run the relevant tests, push the branch and open a PR."
   }' | jq
 ```
 
-The response includes `threadId` and the binding is persisted in `.data/bindings.json`.
+The control plane will:
 
-### Option B — bind an existing durable Codex App Server thread
+1. create a new Codex thread;
+2. persist `issue #245 -> threadId` locally and in a hidden GitHub Issue comment;
+3. start the implementation turn;
+4. instruct Codex to create/update a PR whose body includes `Closes #245`;
+5. require Codex to post one completion comment on that PR.
 
-```bash
-curl -sS http://127.0.0.1:8788/bindings \
-  -H 'content-type: application/json' \
-  -d '{
-    "repo": "my-org/my-repo",
-    "prNumber": 269,
-    "threadId": "thr_...",
-    "cwd": "/absolute/path/to/repo-or-worktree"
-  }' | jq
-```
+If the Issue is already bound, `/tasks` returns `409` instead of accidentally creating a second conversation. `forceNewThread=true` exists only for an intentional replacement.
 
-Note: this resumes a durable Codex thread. It does not attach to an unrelated live terminal process that owns a separate in-flight session.
+## Fix/review an EXISTING PR
 
-List bindings:
-
-```bash
-curl -sS http://127.0.0.1:8788/bindings | jq
-```
-
-Manual local test:
+Manual send:
 
 ```bash
 curl -sS http://127.0.0.1:8788/send \
@@ -117,123 +118,103 @@ curl -sS http://127.0.0.1:8788/send \
   -d '{
     "repo": "my-org/my-repo",
     "prNumber": 269,
-    "message": "Check git status and tell me what remains."
+    "message": "Fix the review findings and run focused tests."
   }' | jq
 ```
 
-## 4. Expose ONLY the webhook port from localhost
+For a PR fix, the resolver tries:
 
-### Cloudflare Quick Tunnel (no account required for quick testing)
+1. local PR binding;
+2. hidden binding marker on the PR;
+3. source Issue discovered from `Closes #<issue>` in the PR body;
+4. source Issue inferred from branch names such as `issue/245` or `task/245`.
+
+When an Issue binding is found, the PR inherits the same `threadId` and receives its own hidden binding marker. If no original thread can be found, the control plane refuses to create a new fix conversation.
+
+## Manual binding
+
+Bind an existing thread to an Issue:
+
+```bash
+curl -sS http://127.0.0.1:8788/bindings \
+  -H 'content-type: application/json' \
+  -d '{
+    "repo": "my-org/my-repo",
+    "kind": "issue",
+    "number": 245,
+    "threadId": "019...",
+    "cwd": "/absolute/path/to/my-repo"
+  }' | jq
+```
+
+Or to a PR:
+
+```bash
+curl -sS http://127.0.0.1:8788/bindings \
+  -H 'content-type: application/json' \
+  -d '{
+    "repo": "my-org/my-repo",
+    "kind": "pr",
+    "number": 269,
+    "sourceIssueNumber": 245,
+    "threadId": "019...",
+    "cwd": "/absolute/path/to/my-repo"
+  }' | jq
+```
+
+List local cache:
+
+```bash
+curl -sS http://127.0.0.1:8788/bindings | jq
+```
+
+Legacy `.data/bindings.json` entries that used `{ prNumber }` are migrated in memory to the new `{ kind: "pr", number }` format when loaded.
+
+## GitHub webhook
+
+Expose only port `8787`:
 
 ```bash
 cloudflared tunnel --url http://localhost:8787
 ```
 
-It prints a temporary URL similar to:
+GitHub webhook payload URL:
 
 ```text
-https://random-words.trycloudflare.com
+https://YOUR-TUNNEL.trycloudflare.com/github/webhook
 ```
 
-Your GitHub Payload URL becomes:
+Select:
 
-```text
-https://random-words.trycloudflare.com/github/webhook
-```
+- Issue comments
+- Pull request reviews
+- Pull request review comments
 
-Do **not** expose port 8788.
-
-### Or ngrok
-
-```bash
-ngrok http 8787
-```
-
-Use the generated HTTPS URL plus `/github/webhook`.
-
-## 5. Configure the GitHub repository webhook
-
-Repo -> Settings -> Webhooks -> Add webhook:
-
-- Payload URL: `https://YOUR-TUNNEL/github/webhook`
-- Content type: `application/json`
-- Secret: exactly the same value as `GITHUB_WEBHOOK_SECRET`
-- Let me select individual events:
-  - Pull request reviews
-  - Pull request review comments
-  - Issue comments
-- Active: enabled
-
-GitHub sends a `ping` event after creation; the bridge should log `ping received`.
-
-## 6. Trigger Codex from GitHub
-
-### Manual command in a PR conversation
-
-From an allowed GitHub user:
+A PR comment from an allowlisted user can trigger a fix:
 
 ```text
 /codex fix the review findings, run tests, and keep the change minimal
 ```
 
-or:
+Completion comments written by Codex do not loop back because only comments beginning with `/codex` or `/codex-fix` are treated as commands.
 
-```text
-/codex-fix fix the null handling noted above and add a regression test
-```
+## Completion contract
 
-### Review events
+Every PR-bound turn requires Codex to post exactly one completion comment containing:
 
-A `pull_request_review` with state `changes_requested` or `commented` is forwarded automatically when the sender is allowlisted.
+- completed/blocked status;
+- concise summary;
+- files changed;
+- tests/checks and results;
+- remaining follow-up/blockers.
 
-Inline review comments are forwarded too when:
-
-```env
-FORWARD_INLINE_REVIEW_COMMENTS=true
-```
-
-Events for one PR are debounced and bundled before sending to Codex. If the Codex thread still has an active regular turn, the bridge uses `turn/steer`; otherwise it starts a new turn.
-
-## 7. Let Codex push updates (optional)
-
-Default:
-
-```env
-CODEX_ALLOW_NETWORK=false
-```
-
-This is safer for the first test. The workspace can be changed, but network access is disabled by the bridge's sandbox policy.
-
-To allow `git push`, `gh`, package registry access, etc.:
-
-```env
-CODEX_ALLOW_NETWORK=true
-```
-
-Restart the bridge after editing `.env`.
-
-This still uses `workspaceWrite`, not unrestricted filesystem access. Your local Git/GitHub credentials must already work in the environment where `codex app-server` runs.
-
-## 8. Suggested end-to-end test
-
-1. Start the bridge.
-2. Bind PR #269 to a Codex thread via `/tasks`.
-3. Start Cloudflare tunnel or ngrok.
-4. Add the GitHub webhook and confirm the ping succeeds.
-5. Add this PR comment from an allowlisted account:
-
-```text
-/codex create a file named bridge-smoke-test.txt containing "webhook reached codex". Do not commit or push.
-```
-
-6. Watch the bridge terminal. You should see the GitHub event accepted and then a Codex `turn/start` or `turn/steer`.
-7. Confirm the file appears in the bound worktree.
+New Issue implementation turns require the same completion comment after their PR exists.
 
 ## Security notes
 
-- Never run this without `GITHUB_WEBHOOK_SECRET` validation.
-- Keep `GITHUB_ALLOWED_REPOS` and `GITHUB_ALLOWED_SENDERS` narrow.
-- Only tunnel port 8787. Admin port 8788 is local-only.
-- Keep network disabled until the local edit loop works.
-- Do not point `cwd` at a directory containing unrelated sensitive data.
-- The bridge declines unexpected Codex approval/elevation requests rather than granting them automatically.
+- Always validate `GITHUB_WEBHOOK_SECRET`.
+- Keep repository and sender allowlists narrow.
+- Never expose admin port `8788` through the tunnel.
+- GitHub binding markers never store local absolute paths.
+- Only binding markers authored by the currently authenticated `gh` user are trusted.
+- Review/fix flows refuse to invent a new conversation when the original thread cannot be recovered.
