@@ -2,9 +2,9 @@
 
 Local read-only dashboard for Codex Control Plane.
 
-## Single-port runtime
+## Production runtime
 
-The control plane now exposes one HTTP origin for everything:
+The built dashboard, dashboard APIs, GitHub webhook and admin APIs share one production origin:
 
 ```text
 http://127.0.0.1:8788/
@@ -41,34 +41,51 @@ http://127.0.0.1:8788/
 
 ## Development
 
+Use the normal Vite development server for HMR and proxy dashboard API requests to the control plane.
+
+Terminal 1:
+
 ```bash
 bun run dev
 ```
 
-This runs the control plane in watch mode plus Vite `build --watch`. The browser still uses only:
+Control plane:
 
 ```text
-http://127.0.0.1:8788/
+http://127.0.0.1:8788
 ```
 
-There is intentionally no second Vite HTTP port. Dashboard assets rebuild automatically; refresh the browser after frontend edits.
+Terminal 2:
 
-## Cloudflare Tunnel + Access
+```bash
+bun run dashboard:dev
+```
 
-A future/public setup only needs one tunnel route:
+Vite dashboard:
+
+```text
+http://127.0.0.1:5173
+```
+
+Vite proxies `/api/*` to `http://127.0.0.1:8788`, including the SSE endpoint.
+
+## Cloudflare Tunnel and auth
+
+A production/public deployment can still use one tunnel route:
 
 ```text
 codex.example.com -> http://127.0.0.1:8788
 ```
 
-Recommended Access layout:
+The GitHub webhook is then:
 
-1. Protect `codex.example.com/*` with a Cloudflare Access Allow policy for trusted users.
-2. Create a more-specific Access application for `codex.example.com/github/webhook` with a Bypass policy so GitHub can deliver webhook requests without an interactive login.
-3. Keep `GITHUB_WEBHOOK_SECRET` enabled. The control plane still validates `X-Hub-Signature-256` on every webhook request, so the Access bypass does not bypass GitHub webhook authentication.
-4. Do not add other Bypass paths. `/api/*`, `/send`, `/interrupt`, `/bindings`, `/notifications/test`, and the dashboard should stay behind Access.
+```text
+https://codex.example.com/github/webhook
+```
 
-For a small/private setup, Cloudflare account membership or email one-time PIN are the quickest user-auth options. No application auth env is required.
+This project does not prescribe a Cloudflare Access Bypass policy. If Cloudflare Access is applied to the entire hostname, GitHub webhook requests will also be challenged by Access and will not reach the origin normally. Keep gateway authentication as a deployment concern until the desired webhook/auth ingress layout is chosen.
+
+`GITHUB_WEBHOOK_SECRET` remains mandatory and the control plane validates `X-Hub-Signature-256` on every GitHub webhook request.
 
 ## Data
 
@@ -88,4 +105,4 @@ GET /api/tasks/:threadId/events
 GET /api/events                  # Server-Sent Events
 ```
 
-The dashboard is intentionally read-only in V1. Existing `/send` and `/interrupt` admin APIs remain available on the same origin.
+The dashboard is intentionally read-only in V1. Existing `/send` and `/interrupt` admin APIs remain available on the production origin.
