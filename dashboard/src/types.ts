@@ -28,6 +28,8 @@ export type DashboardEvent = {
     | "agent.message"
     | "tool.started"
     | "tool.completed"
+    | "subagent.thread"
+    | "subagent.activity"
     | "codex.error";
   threadId: string;
   turnId?: string;
@@ -45,4 +47,24 @@ export type DashboardEvent = {
   text?: string;
   toolName?: string;
   detail?: string;
+  parentThreadId?: string;
+  agentThreadId?: string;
+  agentNickname?: string;
+  agentRole?: string;
+  collabTool?: string;
+  prompt?: string;
+  agentStatus?: string;
+};
+
+export type AgentThread = {
+  id: string;
+  parentThreadId?: string;
+  agentNickname?: string;
+  agentRole?: string;
+  status: string;
+};
+
+export type AgentThreadResponse = {
+  thread: AgentThread;
+  events: DashboardEvent[];
 };
