@@ -195,10 +195,10 @@ export class DashboardStore {
         .map((event) => event.turnId)
         .filter((turnId): turnId is string => Boolean(turnId)),
     );
-    const persistedTurnStart = new Map(
+    const persistedTurnStart = new Map<string, string>(
       persisted
         .filter((event) => event.type === "turn.started" && event.turnId)
-        .map((event) => [event.turnId as string, event.timestamp]),
+        .map((event) => [event.turnId as string, event.timestamp] as const),
     );
 
     const history: DashboardEvent[] = [];
@@ -433,7 +433,14 @@ export class DashboardStore {
 
     if (method === "item/started") {
       const item = (params.item ?? {}) as Record<string, any>;
-      if (item.type === "agentMessage" || item.type === "reasoning") return;
+      if (
+        item.type === "agentMessage" ||
+        item.type === "plan" ||
+        item.type === "reasoning" ||
+        item.type === "userMessage"
+      ) {
+        return;
+      }
       void this.publish({
         type: "tool.started",
         threadId,
@@ -447,14 +454,17 @@ export class DashboardStore {
 
     if (method === "item/completed") {
       const item = (params.item ?? {}) as Record<string, any>;
-      if (item.type === "reasoning") return;
-      if (item.type === "agentMessage" && typeof item.text === "string") {
+      if (item.type === "reasoning" || item.type === "userMessage") return;
+      if ((item.type === "agentMessage" || item.type === "plan") && typeof item.text === "string") {
+        const text = cleanAgentText(item.text);
+        if (!text) return;
         void this.publish({
           type: "agent.message",
           threadId,
           turnId: turnId || undefined,
           itemId: asString(item.id) || undefined,
-          text: cleanAgentText(item.text),
+          text,
+          toolName: item.type === "plan" ? "Codex plan" : undefined,
         });
         return;
       }
