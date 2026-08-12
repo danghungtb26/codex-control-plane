@@ -4,12 +4,14 @@
 
 :8080 {
     @githubWebhook path /github/webhook
-    handle @githubWebhook {
-        reverse_proxy {$CORE_URL}
+    @protected not path /github/webhook
+
+    basic_auth @protected {
+        {$CADDY_AUTH_USERNAME} {$CADDY_AUTH_PASSWORD_HASH}
     }
 
-    basic_auth {
-        {$CADDY_AUTH_USERNAME} {$CADDY_AUTH_PASSWORD_HASH}
+    handle @githubWebhook {
+        reverse_proxy {$CORE_URL}
     }
 
     @backend path /api/* /tasks /send /interrupt /bindings /notifications/* /health
