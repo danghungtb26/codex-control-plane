@@ -274,6 +274,44 @@ export class CodexAppServerClient extends EventEmitter {
     const params = (message.params ?? {}) as Record<string, any>;
     this.emit("notification", { method, params } satisfies CodexNotificationEvent);
 
+    if (method === "thread/started") {
+      const thread = (params.thread ?? {}) as Record<string, any>;
+      const childThreadId = String(thread.id ?? "");
+      const parentThreadId = String(thread.parentThreadId ?? "");
+
+      if (childThreadId && parentThreadId) {
+        const agentNickname = typeof thread.agentNickname === "string" ? thread.agentNickname : undefined;
+        const agentRole = typeof thread.agentRole === "string" ? thread.agentRole : undefined;
+        const agentStatus = thread.status ?? { type: "active" };
+
+        this.emit("notification", {
+          method: "item/started",
+          params: {
+            threadId: parentThreadId,
+            item: {
+              id: `subagent:${childThreadId}`,
+              type: "collabAgentToolCall",
+              tool: "spawn_agent",
+              status: "inProgress",
+              senderThreadId: parentThreadId,
+              receiverThreadIds: [childThreadId],
+              receiverAgents: [
+                {
+                  threadId: childThreadId,
+                  agentNickname,
+                  agentRole,
+                },
+              ],
+              agentsStates: {
+                [childThreadId]: agentStatus,
+              },
+            },
+          },
+        } satisfies CodexNotificationEvent);
+      }
+      return;
+    }
+
     if (method === "turn/started") {
       const threadId = String(params.threadId ?? "");
       const turnId = String(params.turn?.id ?? "");
