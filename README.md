@@ -237,7 +237,20 @@ The control plane validates the GitHub comment receipt. If a non-interrupted tur
 
 ## Discord notifications
 
-When configured, completion notifications contain the actual work context instead of only thread metadata:
+When `DISCORD_WEBHOOK_URL` is configured, each tracked task has a lifecycle notification.
+
+At task start:
+
+```text
+🚀 Codex task started
+my-org/my-repo · PR #269
+Action: fix-comment
+Task: Fix this review finding and run the relevant tests.
+Commit before: abc123def456
+Thread: 019...
+```
+
+On normal completion or terminal failure/interruption:
 
 ```text
 ✅ Codex completed
@@ -252,9 +265,23 @@ GitHub report comment: 123456789
 Report: https://github.com/...
 ```
 
-The control plane snapshots `git rev-parse HEAD` **before starting the Codex turn** and reads it again after completion, so Discord can show the actual commit transition. If the action does not create a commit, it shows the commit as unchanged. Summary prefers the `CODEX_TASK_SUMMARY` returned by Codex and falls back to its final response/task context.
+A Codex turn ending with status `failed` uses the same terminal notification with a ❌ status. If `turn/start`, `turn/steer`, or the initial send fails before a tracked turn can run to completion, the control plane sends a separate failure notification:
 
-Test Discord:
+```text
+❌ Codex task failed before completion
+my-org/my-repo · PR #269
+Action: fix-comment
+Task: Fix this review finding.
+Error: <actual error>
+Commit: abc123def456
+Thread: 019...
+```
+
+The control plane snapshots `git rev-parse HEAD` before starting the Codex turn and reads it again after completion, so Discord shows the actual commit transition. If the action does not create a commit, it shows the commit as unchanged. Summary prefers the `CODEX_TASK_SUMMARY` returned by Codex and falls back to its final response/task context.
+
+Discord notification errors are logged but do not cause the Codex task itself to fail.
+
+Test Discord connectivity:
 
 ```bash
 curl -X POST http://127.0.0.1:8788/notifications/test
