@@ -37,6 +37,7 @@ const withRecoveryContext = (prompt: string, recoveredFromThreadId?: string) => 
 
 export class ReviewDispatcher {
   private pending = new Map<string, PendingBatch>();
+  private freshThreads = new Set<string>();
 
   constructor(
     private readonly resolver: BindingResolver,
@@ -104,6 +105,7 @@ export class ReviewDispatcher {
     }
 
     const { threadId } = await this.codex.startThread(cwd);
+    this.freshThreads.add(threadId);
     return this.resolver.bind({
       repo: message.repo,
       kind: "issue",
@@ -122,6 +124,7 @@ export class ReviewDispatcher {
     }
 
     const { threadId } = await this.codex.startThread(cwd);
+    this.freshThreads.add(threadId);
     console.warn(
       `[dispatcher] no durable binding for ${message.repo} PR #${message.number}; created replacement thread ${threadId}`,
     );
@@ -135,7 +138,9 @@ export class ReviewDispatcher {
   }
 
   private async ensureUsableBinding(binding: Binding): Promise<UsableBinding> {
-    if (this.codex.getActiveTurn(binding.threadId)) return { binding };
+    if (this.freshThreads.delete(binding.threadId) || this.codex.getActiveTurn(binding.threadId)) {
+      return { binding };
+    }
 
     try {
       await this.codex.resumeThread(binding.threadId);
@@ -266,6 +271,9 @@ export class ReviewDispatcher {
   private async dispatchPrBatch(messages: DispatchMessage[]) {
     const first = messages[0];
     if (!first) return;
+    if (first.action !== "summary" && first.action !== "fix-comment") {
+      throw new Error(`/codex:${first.action} is not valid on a PR`);
+    }
 
     const resolved = (await this.resolver.resolvePr(first.repo, first.number)) ?? (await this.createPrBinding(first));
     const { binding, recoveredFromThreadId } = await this.ensureUsableBinding(resolved);
@@ -298,10 +306,6 @@ export class ReviewDispatcher {
             allowNetwork: this.config.codexAllowNetwork,
           }),
       );
-    }
-
-    if (first.action !== "fix-comment") {
-      throw new Error(`/codex:${first.action} is not valid on a PR`);
     }
 
     const sections = messages.map((message, index) => {
