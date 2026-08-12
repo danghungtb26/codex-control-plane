@@ -95,22 +95,22 @@ export class ReviewDispatcher {
   }
 
   private async sendIssueTurn(message: DispatchMessage, binding: Binding, prompt: string) {
-    const commitBefore = await this.notifier.snapshotCommit(binding.cwd);
-    const turn = await this.codex.send(binding.threadId, prompt, {
-      cwd: binding.cwd,
-      allowNetwork: this.config.codexAllowNetwork,
-    });
-    this.notifier.register(turn.turnId, {
-      repo: message.repo,
-      kind: "issue",
-      number: message.number,
-      threadId: binding.threadId,
-      action: message.action,
-      request: message.text || `/codex:${message.action}`,
-      cwd: binding.cwd,
-      commitBefore,
-    });
-    return turn;
+    return this.notifier.runTracked(
+      {
+        repo: message.repo,
+        kind: "issue",
+        number: message.number,
+        threadId: binding.threadId,
+        action: message.action,
+        request: message.text || `/codex:${message.action}`,
+        cwd: binding.cwd,
+      },
+      () =>
+        this.codex.send(binding.threadId, prompt, {
+          cwd: binding.cwd,
+          allowNetwork: this.config.codexAllowNetwork,
+        }),
+    );
   }
 
   private async dispatchIssueCommand(message: DispatchMessage) {
@@ -180,22 +180,22 @@ export class ReviewDispatcher {
         task: request,
       });
       console.log(`[dispatcher] summarize PR ${first.repo}#${first.number} on ${binding.threadId}`);
-      const commitBefore = await this.notifier.snapshotCommit(binding.cwd);
-      const turn = await this.codex.send(binding.threadId, prompt, {
-        cwd: binding.cwd,
-        allowNetwork: this.config.codexAllowNetwork,
-      });
-      this.notifier.register(turn.turnId, {
-        repo: first.repo,
-        kind: "pr",
-        number: first.number,
-        threadId: binding.threadId,
-        action: "summary",
-        request: request || "/codex:summary",
-        cwd: binding.cwd,
-        commitBefore,
-      });
-      return turn;
+      return this.notifier.runTracked(
+        {
+          repo: first.repo,
+          kind: "pr",
+          number: first.number,
+          threadId: binding.threadId,
+          action: "summary",
+          request: request || "/codex:summary",
+          cwd: binding.cwd,
+        },
+        () =>
+          this.codex.send(binding.threadId, prompt, {
+            cwd: binding.cwd,
+            allowNetwork: this.config.codexAllowNetwork,
+          }),
+      );
     }
 
     if (first.action !== "fix-comment") {
@@ -224,21 +224,23 @@ export class ReviewDispatcher {
     });
 
     console.log(`[dispatcher] fix-comment: forwarding ${messages.length} command(s) to ${binding.threadId}`);
-    const commitBefore = await this.notifier.snapshotCommit(binding.cwd);
-    const turn = await this.codex.send(binding.threadId, prompt, {
-      cwd: binding.cwd,
-      allowNetwork: this.config.codexAllowNetwork,
-    });
-    this.notifier.register(turn.turnId, {
-      repo: first.repo,
-      kind: "pr",
-      number: first.number,
-      threadId: binding.threadId,
-      action: "fix-comment",
-      request: messages.map((message) => message.text).filter(Boolean).join(" | ") || "/codex:fix-comment",
-      cwd: binding.cwd,
-      commitBefore,
-    });
-    return turn;
+    const request =
+      messages.map((message) => message.text).filter(Boolean).join(" | ") || "/codex:fix-comment";
+    return this.notifier.runTracked(
+      {
+        repo: first.repo,
+        kind: "pr",
+        number: first.number,
+        threadId: binding.threadId,
+        action: "fix-comment",
+        request,
+        cwd: binding.cwd,
+      },
+      () =>
+        this.codex.send(binding.threadId, prompt, {
+          cwd: binding.cwd,
+          allowNetwork: this.config.codexAllowNetwork,
+        }),
+    );
   }
 }
