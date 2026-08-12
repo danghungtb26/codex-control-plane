@@ -46,3 +46,182 @@ a {
   background: rgb(71 85 105 / 0.75);
   background-clip: padding-box;
 }
+
+.mobile-nav-trigger,
+.mobile-nav-backdrop,
+.mobile-nav-close {
+  display: none;
+}
+
+@keyframes mobile-agent-in {
+  from {
+    opacity: 0;
+    transform: translateX(1.25rem);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@media (max-width: 767px) {
+  html.tasks-drawer-open,
+  html.tasks-drawer-open body {
+    overflow: hidden;
+  }
+
+  body {
+    overflow-x: hidden;
+  }
+
+  header {
+    padding-left: 4.25rem !important;
+    padding-right: 1rem !important;
+  }
+
+  header p {
+    display: none;
+  }
+
+  main {
+    height: calc(100dvh - 65px) !important;
+    min-height: 0;
+  }
+
+  main > aside:first-child {
+    position: fixed;
+    inset: 0 auto 0 0;
+    z-index: 70;
+    width: min(88vw, 340px);
+    min-height: 0;
+    transform: translateX(-102%);
+    border-right: 1px solid rgb(51 65 85 / 0.9);
+    background: rgb(2 6 23 / 0.98);
+    box-shadow: 24px 0 60px rgb(0 0 0 / 0.42);
+    backdrop-filter: blur(18px);
+    pointer-events: none;
+    transition:
+      transform 180ms ease,
+      box-shadow 180ms ease;
+  }
+
+  html.tasks-drawer-open main > aside:first-child {
+    transform: translateX(0);
+    pointer-events: auto;
+  }
+
+  main > aside:first-child > div:first-child {
+    padding-top: calc(4rem + env(safe-area-inset-top));
+  }
+
+  main > section {
+    height: 100%;
+    min-height: 0;
+  }
+
+  main section [aria-live="polite"] > div {
+    padding: 1rem;
+    padding-bottom: 3rem;
+  }
+
+  .mobile-nav-trigger {
+    position: fixed;
+    top: calc(0.7rem + env(safe-area-inset-top));
+    left: calc(0.75rem + env(safe-area-inset-left));
+    z-index: 55;
+    display: flex;
+    width: 2.5rem;
+    height: 2.5rem;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.25rem;
+    border: 1px solid rgb(51 65 85 / 0.9);
+    border-radius: 0.7rem;
+    background: rgb(15 23 42 / 0.92);
+    box-shadow: 0 10px 30px rgb(0 0 0 / 0.28);
+    backdrop-filter: blur(12px);
+    transition:
+      opacity 120ms ease,
+      transform 120ms ease,
+      border-color 120ms ease;
+  }
+
+  .mobile-nav-trigger:active {
+    transform: scale(0.96);
+  }
+
+  .mobile-nav-trigger span {
+    display: block;
+    width: 0.95rem;
+    height: 1px;
+    border-radius: 999px;
+    background: #cbd5e1;
+  }
+
+  html.tasks-drawer-open .mobile-nav-trigger {
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .mobile-nav-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 60;
+    display: block;
+    border: 0;
+    background: rgb(2 6 23 / 0.66);
+    backdrop-filter: blur(4px);
+  }
+
+  .mobile-nav-close {
+    position: fixed;
+    top: calc(0.75rem + env(safe-area-inset-top));
+    left: min(calc(88vw - 3rem), 292px);
+    z-index: 80;
+    display: grid;
+    width: 2.25rem;
+    height: 2.25rem;
+    place-items: center;
+    border: 1px solid rgb(71 85 105 / 0.8);
+    border-radius: 0.65rem;
+    background: rgb(15 23 42 / 0.94);
+    color: #94a3b8;
+    font-size: 1.15rem;
+    line-height: 1;
+    box-shadow: 0 8px 24px rgb(0 0 0 / 0.26);
+  }
+
+  main > section > div:last-child > aside {
+    position: fixed !important;
+    inset: 0 !important;
+    z-index: 90 !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    height: 100dvh;
+    border-left: 0 !important;
+    background: rgb(2 6 23 / 0.99) !important;
+    box-shadow: none !important;
+    animation: mobile-agent-in 180ms ease-out;
+  }
+
+  main > section > div:last-child > aside > div:first-child {
+    padding-top: calc(0.8rem + env(safe-area-inset-top));
+    padding-left: max(1rem, env(safe-area-inset-left));
+    padding-right: max(1rem, env(safe-area-inset-right));
+  }
+
+  main > section > div:last-child > aside > div:last-child {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  main > aside:first-child,
+  main > section > div:last-child > aside,
+  .mobile-nav-trigger {
+    animation: none !important;
+    transition: none !important;
+  }
+}
