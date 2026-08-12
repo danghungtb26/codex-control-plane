@@ -1,0 +1,19 @@
+{
+    auto_https off
+}
+
+:8080 {
+    @githubWebhook path /github/webhook
+
+    handle @githubWebhook {
+        reverse_proxy 127.0.0.1:{$PORT}
+    }
+
+    handle {
+        basic_auth {
+            {$CADDY_AUTH_USERNAME} {$CADDY_AUTH_PASSWORD_HASH}
+        }
+
+        reverse_proxy 127.0.0.1:{$PORT}
+    }
+}
