@@ -4,16 +4,25 @@
 
 :8080 {
     @githubWebhook path /github/webhook
-
     handle @githubWebhook {
-        reverse_proxy 127.0.0.1:{$PORT}
+        reverse_proxy {$CORE_URL}
+    }
+
+    basic_auth {
+        {$CADDY_AUTH_USERNAME} {$CADDY_AUTH_PASSWORD_HASH}
+    }
+
+    @backend path /api/* /tasks /send /interrupt /bindings /notifications/* /health
+    handle @backend {
+        reverse_proxy {$CORE_URL}
     }
 
     handle {
-        basic_auth {
-            {$CADDY_AUTH_USERNAME} {$CADDY_AUTH_PASSWORD_HASH}
+        root * /srv/dashboard
+        route {
+            try_files {path} /index.html
+            header /index.html Cache-Control "public, max-age=0, must-revalidate"
+            file_server
         }
-
-        reverse_proxy 127.0.0.1:{$PORT}
     }
 }
