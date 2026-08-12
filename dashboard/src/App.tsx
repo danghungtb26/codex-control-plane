@@ -43,26 +43,35 @@ const GithubLink = ({ href, children }: { href: string; children: ReactNode }) =
   </a>
 );
 
+const UserMessage = ({ event, historical = false }: { event: DashboardEvent; historical?: boolean }) => {
+  const time = new Date(event.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const text = historical ? event.text : event.request || `/${event.action}`;
+  return (
+    <article className="rounded-2xl border border-indigo-400/20 bg-indigo-400/5 p-4">
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <span className="text-xs font-semibold uppercase tracking-wider text-indigo-300">
+          You{!historical && event.action ? ` · ${event.action}` : ""}
+        </span>
+        <span className="text-[11px] text-slate-500">{time}</span>
+      </div>
+      <p className="whitespace-pre-wrap text-sm leading-6 text-slate-200">{text}</p>
+    </article>
+  );
+};
+
 const TranscriptEvent = ({ event }: { event: DashboardEvent }) => {
   const time = new Date(event.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
-  if (event.type === "task.started") {
-    return (
-      <article className="rounded-2xl border border-indigo-400/20 bg-indigo-400/5 p-4">
-        <div className="mb-2 flex items-center justify-between gap-3">
-          <span className="text-xs font-semibold uppercase tracking-wider text-indigo-300">You · {event.action}</span>
-          <span className="text-[11px] text-slate-500">{time}</span>
-        </div>
-        <p className="whitespace-pre-wrap text-sm leading-6 text-slate-200">{event.request || `/${event.action}`}</p>
-      </article>
-    );
-  }
+  if (event.type === "task.started") return <UserMessage event={event} />;
+  if (event.type === "user.message") return <UserMessage event={event} historical />;
 
   if (event.type === "agent.message") {
     return (
       <article className="rounded-2xl border border-slate-700/80 bg-slate-900/70 p-4">
         <div className="mb-2 flex items-center justify-between gap-3">
-          <span className="text-xs font-semibold uppercase tracking-wider text-emerald-300">Codex</span>
+          <span className="text-xs font-semibold uppercase tracking-wider text-emerald-300">
+            {event.toolName || "Codex"}
+          </span>
           <span className="text-[11px] text-slate-500">{time}</span>
         </div>
         <p className="whitespace-pre-wrap text-sm leading-6 text-slate-200">{event.text}</p>
@@ -93,10 +102,12 @@ const TranscriptEvent = ({ event }: { event: DashboardEvent }) => {
       <div className="rounded-xl border border-slate-800 bg-slate-950/50 px-4 py-3 text-xs text-slate-400">
         <div className="flex flex-wrap items-center gap-2">
           <StatusBadge status={event.status || "completed"} />
-          <span>
-            commit <span className="font-mono text-slate-300">{shortSha(event.commitBefore)}</span> →{" "}
-            <span className="font-mono text-slate-300">{shortSha(event.commitAfter)}</span>
-          </span>
+          {event.commitBefore || event.commitAfter ? (
+            <span>
+              commit <span className="font-mono text-slate-300">{shortSha(event.commitBefore)}</span> →{" "}
+              <span className="font-mono text-slate-300">{shortSha(event.commitAfter)}</span>
+            </span>
+          ) : null}
           <span className="ml-auto text-[11px] text-slate-600">{time}</span>
         </div>
         {event.summary ? <p className="mt-2 leading-5 text-slate-300">{event.summary}</p> : null}
@@ -114,7 +125,11 @@ const TranscriptEvent = ({ event }: { event: DashboardEvent }) => {
   }
 
   if (event.type === "turn.started") {
-    return <div className="px-1 text-[11px] text-slate-600">Turn {event.turnId ? event.turnId.slice(0, 12) : ""} started · {time}</div>;
+    return (
+      <div className="px-1 text-[11px] text-slate-600">
+        Turn {event.turnId ? event.turnId.slice(0, 12) : ""} started · {time}
+      </div>
+    );
   }
 
   return null;
@@ -145,6 +160,7 @@ export default function App() {
   }, [reloadTasks]);
 
   useEffect(() => {
+    setLiveText({});
     if (!selectedThreadId) {
       setEvents([]);
       return;
@@ -227,7 +243,11 @@ export default function App() {
             <p className="mt-0.5 text-xs text-slate-500">Tasks, durable threads and live Codex activity</p>
           </div>
           <div className="flex items-center gap-2 text-xs text-slate-400">
-            <span className={`h-2 w-2 rounded-full ${connected ? "bg-emerald-400 shadow-[0_0_12px_rgba(52,211,153,.7)]" : "bg-rose-400"}`} />
+            <span
+              className={`h-2 w-2 rounded-full ${
+                connected ? "bg-emerald-400 shadow-[0_0_12px_rgba(52,211,153,.7)]" : "bg-rose-400"
+              }`}
+            />
             {connected ? "Live" : "Reconnecting"}
           </div>
         </div>
@@ -263,7 +283,11 @@ export default function App() {
                 >
                   <div className="mb-2 flex items-center justify-between gap-2">
                     <div className="truncate text-sm font-medium text-slate-100">
-                      {task.issueNumber ? `Issue #${task.issueNumber}` : task.prNumbers[0] ? `PR #${task.prNumbers[0]}` : "Bound thread"}
+                      {task.issueNumber
+                        ? `Issue #${task.issueNumber}`
+                        : task.prNumbers[0]
+                          ? `PR #${task.prNumbers[0]}`
+                          : "Bound thread"}
                     </div>
                     <StatusBadge status={task.status} />
                   </div>
@@ -272,7 +296,9 @@ export default function App() {
                   <div className="mt-3 flex flex-wrap gap-1.5 text-[11px] text-slate-500">
                     {task.action ? <span className="rounded bg-slate-900 px-1.5 py-0.5">{task.action}</span> : null}
                     {task.prNumbers.map((number) => (
-                      <span key={number} className="rounded bg-slate-900 px-1.5 py-0.5">PR #{number}</span>
+                      <span key={number} className="rounded bg-slate-900 px-1.5 py-0.5">
+                        PR #{number}
+                      </span>
                     ))}
                   </div>
                 </button>
@@ -294,47 +320,69 @@ export default function App() {
                     </div>
                     <h2 className="truncate text-lg font-semibold text-white">
                       {selected.issueNumber ? `Issue #${selected.issueNumber}` : "Codex thread"}
-                      {selected.prNumbers.length ? ` → PR ${selected.prNumbers.map((number) => `#${number}`).join(", ")}` : ""}
+                      {selected.prNumbers.length
+                        ? ` → PR ${selected.prNumbers.map((number) => `#${number}`).join(", ")}`
+                        : ""}
                     </h2>
                     <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
                       <span>{selected.repo}</span>
-                      <span className="font-mono" title={selected.threadId}>{shortThread(selected.threadId)}</span>
-                      <span>commit {shortSha(selected.commitBefore)} → {shortSha(selected.commitAfter)}</span>
+                      <span className="font-mono" title={selected.threadId}>
+                        {shortThread(selected.threadId)}
+                      </span>
+                      <span>
+                        commit {shortSha(selected.commitBefore)} → {shortSha(selected.commitAfter)}
+                      </span>
                     </div>
                   </div>
                   <div className="flex flex-wrap gap-2">
                     {selected.issueNumber ? (
-                      <GithubLink href={`https://github.com/${selected.repo}/issues/${selected.issueNumber}`}>Issue #{selected.issueNumber} ↗</GithubLink>
+                      <GithubLink href={`https://github.com/${selected.repo}/issues/${selected.issueNumber}`}>
+                        Issue #{selected.issueNumber} ↗
+                      </GithubLink>
                     ) : null}
                     {selected.prNumbers.map((number) => (
-                      <GithubLink key={number} href={`https://github.com/${selected.repo}/pull/${number}`}>PR #{number} ↗</GithubLink>
+                      <GithubLink key={number} href={`https://github.com/${selected.repo}/pull/${number}`}>
+                        PR #{number} ↗
+                      </GithubLink>
                     ))}
                   </div>
                 </div>
-                {selected.summary ? <p className="mt-3 max-w-4xl text-sm leading-6 text-slate-400">{selected.summary}</p> : null}
+                {selected.summary ? (
+                  <p className="mt-3 max-w-4xl text-sm leading-6 text-slate-400">{selected.summary}</p>
+                ) : null}
               </div>
 
               <div className="min-h-0 flex-1 overflow-y-auto">
                 <div className="mx-auto flex max-w-4xl flex-col gap-3 p-5 pb-12">
-                  {events.map((event) => <TranscriptEvent key={event.id} event={event} />)}
+                  {events.map((event) => (
+                    <TranscriptEvent key={event.id} event={event} />
+                  ))}
                   {liveEntries.map(([key, text]) => (
-                    <article key={key} className="rounded-2xl border border-emerald-400/20 bg-emerald-400/5 p-4 shadow-[0_0_30px_rgba(16,185,129,.04)]">
+                    <article
+                      key={key}
+                      className="rounded-2xl border border-emerald-400/20 bg-emerald-400/5 p-4 shadow-[0_0_30px_rgba(16,185,129,.04)]"
+                    >
                       <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-emerald-300">
                         <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" /> Codex · live
                       </div>
-                      <p className="whitespace-pre-wrap text-sm leading-6 text-slate-200">{text}<span className="ml-0.5 inline-block h-4 w-1 animate-pulse bg-emerald-400 align-middle" /></p>
+                      <p className="whitespace-pre-wrap text-sm leading-6 text-slate-200">
+                        {text}
+                        <span className="ml-0.5 inline-block h-4 w-1 animate-pulse bg-emerald-400 align-middle" />
+                      </p>
                     </article>
                   ))}
                   {!events.length && !liveEntries.length ? (
                     <div className="rounded-2xl border border-dashed border-slate-800 p-10 text-center text-sm text-slate-600">
-                      This thread has no persisted dashboard transcript yet. New turns will appear here in realtime.
+                      No transcript is available for this thread yet. New activity will appear here in realtime.
                     </div>
                   ) : null}
                 </div>
               </div>
             </>
           ) : (
-            <div className="flex flex-1 items-center justify-center p-10 text-sm text-slate-600">Select a task to inspect its conversation.</div>
+            <div className="flex flex-1 items-center justify-center p-10 text-sm text-slate-600">
+              Select a task to inspect its conversation.
+            </div>
           )}
         </section>
       </main>
