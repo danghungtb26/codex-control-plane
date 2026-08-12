@@ -3,7 +3,7 @@ import path from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { BindingStore } from "./binding-store.js";
 import type { CodexAppServerClient } from "./codex-client.js";
-import type { DashboardStore } from "./dashboard-store.js";
+import type { DashboardEvent, DashboardStore } from "./dashboard-store.js";
 import { sendJson } from "./http-utils.js";
 
 const MIME_TYPES: Record<string, string> = {
@@ -36,6 +36,13 @@ const threadStatus = (value: unknown) => {
   return asString(status.type) || asString(status.status) || "unknown";
 };
 
+const normalizeDashboardEvent = (event: DashboardEvent): DashboardEvent => {
+  if (event.toolName !== "collabAgentToolCall") return event;
+  return { ...event, toolName: "collabToolCall" };
+};
+
+const normalizeDashboardEvents = (events: DashboardEvent[]) => events.map(normalizeDashboardEvent);
+
 export class DashboardHttp {
   private readonly distPath = path.resolve("dashboard/dist");
 
@@ -62,7 +69,7 @@ export class DashboardHttp {
       } catch (error) {
         console.warn(`[dashboard] history unavailable for ${threadId}:`, (error as Error).message);
       }
-      sendJson(res, 200, this.dashboard.mergeThreadHistory(threadId, thread));
+      sendJson(res, 200, normalizeDashboardEvents(this.dashboard.mergeThreadHistory(threadId, thread)));
       return true;
     }
 
@@ -84,7 +91,7 @@ export class DashboardHttp {
           agentRole: asString(thread?.agentRole) || undefined,
           status: threadStatus(thread?.status),
         },
-        events: this.dashboard.mergeThreadHistory(threadId, thread),
+        events: normalizeDashboardEvents(this.dashboard.mergeThreadHistory(threadId, thread)),
       });
       return true;
     }
@@ -113,7 +120,8 @@ export class DashboardHttp {
     res.write(`event: connected\ndata: ${JSON.stringify({ timestamp: new Date().toISOString() })}\n\n`);
 
     const unsubscribe = this.dashboard.subscribe((event) => {
-      res.write(`id: ${event.id}\ndata: ${JSON.stringify(event)}\n\n`);
+      const normalized = normalizeDashboardEvent(event);
+      res.write(`id: ${normalized.id}\ndata: ${JSON.stringify(normalized)}\n\n`);
     });
     const heartbeat = setInterval(() => res.write(": heartbeat\n\n"), 20_000);
 
