@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { fetchTaskEvents, fetchTasks } from "./api";
 import type { DashboardEvent, DashboardTask } from "./types";
 
@@ -32,7 +32,7 @@ const StatusBadge = ({ status }: { status: string }) => (
   </span>
 );
 
-const GithubLink = ({ href, children }: { href: string; children: React.ReactNode }) => (
+const GithubLink = ({ href, children }: { href: string; children: ReactNode }) => (
   <a
     className="rounded-md border border-slate-700 bg-slate-900/70 px-2 py-1 text-xs text-slate-300 transition hover:border-slate-500 hover:text-white"
     href={href}
