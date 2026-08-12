@@ -207,7 +207,9 @@ export class ReviewDispatcher {
       `You are continuing work on GitHub PR ${first.repo}#${first.number} in its existing implementation conversation.`,
       "The trusted user explicitly invoked `/codex:fix-comment`. Only now should review feedback be acted on.",
       ...sections,
-      "Inspect the current working tree first so you do not overwrite unrelated changes. Apply only the relevant fixes, run the most relevant tests/checks, commit the fix when appropriate, and push the existing PR branch. Do not merge the PR.",
+      "Inspect the current working tree first so you do not overwrite unrelated changes. Apply only the relevant fixes and run the most relevant tests/checks.",
+      "If the fix changes files, create a real git commit containing the task-related changes and push it to the existing PR branch before reporting completion. Do not create an empty commit when no code change is required.",
+      "Do not merge the PR.",
     ].join("\n\n");
 
     const prompt = withGithubCompletionComment({
