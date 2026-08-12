@@ -84,7 +84,7 @@ export class CodexAppServerClient extends EventEmitter {
 
     const account = await this.request("account/read", { refreshToken: false });
     console.log("[codex] connected account:", JSON.stringify(account));
-    console.log(`[codex] approvals: ${this.autoApprove ? "auto-review" : "deny"}`);
+    console.log(`[codex] access: ${this.autoApprove ? "danger-full-access" : "workspace-write"}`);
   }
 
   stop() {
@@ -96,9 +96,8 @@ export class CodexAppServerClient extends EventEmitter {
   async startThread(cwd: string) {
     const result = await this.request("thread/start", {
       cwd,
-      approvalPolicy: this.autoApprove ? "on-request" : "never",
-      ...(this.autoApprove ? { approvalsReviewer: "auto_review" } : {}),
-      sandbox: "workspace-write",
+      approvalPolicy: "never",
+      sandbox: this.autoApprove ? "danger-full-access" : "workspace-write",
       serviceName: "codex_control_plane",
     });
 
@@ -110,9 +109,8 @@ export class CodexAppServerClient extends EventEmitter {
   async resumeThread(threadId: string) {
     const result = await this.request("thread/resume", {
       threadId,
-      approvalPolicy: this.autoApprove ? "on-request" : "never",
-      ...(this.autoApprove ? { approvalsReviewer: "auto_review" } : {}),
-      sandbox: "workspace-write",
+      approvalPolicy: "never",
+      sandbox: this.autoApprove ? "danger-full-access" : "workspace-write",
     });
     this.loadedThreads.add(threadId);
     return result.thread;
@@ -124,18 +122,23 @@ export class CodexAppServerClient extends EventEmitter {
     const params: Record<string, unknown> = {
       threadId,
       input: [{ type: "text", text: message }],
-      approvalPolicy: this.autoApprove ? "on-request" : "never",
-      ...(this.autoApprove ? { approvalsReviewer: "auto_review" } : {}),
+      approvalPolicy: "never",
     };
 
-    const allowNetwork = options.allowNetwork ?? this.defaultAllowNetwork;
     if (options.cwd) {
       params.cwd = options.cwd;
-      params.sandboxPolicy = {
-        type: "workspaceWrite",
-        writableRoots: [options.cwd],
-        networkAccess: allowNetwork,
-      };
+      if (this.autoApprove) {
+        params.sandboxPolicy = {
+          type: "dangerFullAccess",
+        };
+      } else {
+        const allowNetwork = options.allowNetwork ?? this.defaultAllowNetwork;
+        params.sandboxPolicy = {
+          type: "workspaceWrite",
+          writableRoots: [options.cwd],
+          networkAccess: allowNetwork,
+        };
+      }
     }
 
     const result = await this.request("turn/start", params);
