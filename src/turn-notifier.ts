@@ -8,11 +8,10 @@ const execFileAsync = promisify(execFile);
 
 type TurnRegistration = DiscordNotificationTarget & {
   cwd: string;
+  commitBefore: string;
 };
 
-type TurnContext = TurnRegistration & {
-  commitBefore: Promise<string>;
-};
+type TurnContext = TurnRegistration;
 
 const COMMENT_ID_RE = /^GITHUB_REPORT_COMMENT_ID=(\d+)$/m;
 const COMMENT_URL_RE = /^GITHUB_REPORT_COMMENT_URL=(https:\/\/github\.com\/[^\s]+#issuecomment-\d+)$/m;
@@ -74,12 +73,13 @@ export class TurnNotifier {
     });
   }
 
+  snapshotCommit(cwd: string) {
+    return readGitHead(cwd);
+  }
+
   register(turnId: string, context: TurnRegistration) {
     if (!turnId) return;
-    this.contexts.set(turnId, {
-      ...context,
-      commitBefore: readGitHead(context.cwd),
-    });
+    this.contexts.set(turnId, context);
   }
 
   private async resolveCodexReceipt(
@@ -115,10 +115,7 @@ export class TurnNotifier {
     if (!context) return;
     this.contexts.delete(event.turnId);
 
-    const [commitBefore, commitAfter] = await Promise.all([
-      context.commitBefore,
-      readGitHead(context.cwd),
-    ]);
+    const commitAfter = await readGitHead(context.cwd);
     const summary = summaryFrom(event.finalText, context, event.status);
 
     let receipt = await this.resolveCodexReceipt(context, event.finalText);
@@ -150,7 +147,7 @@ export class TurnNotifier {
         turnId: event.turnId,
         status: event.status,
         summary,
-        commitBefore,
+        commitBefore: context.commitBefore,
         commitAfter,
         reportCommentId: receipt?.commentId,
         reportCommentUrl: receipt?.commentUrl,
