@@ -1,6 +1,7 @@
 export type JsonObject = Record<string, unknown>;
 
 export type BindingKind = "issue" | "pr";
+export type CodexAction = "implement" | "fix-comment" | "summary" | "create-pr" | "manual";
 
 export type Binding = {
   repo: string;
@@ -27,7 +28,7 @@ export type DispatchMessage = {
   targetKind: BindingKind;
   number: number;
   sender: string;
-  kind: "review" | "inline-review" | "command";
+  action: Exclude<CodexAction, "manual">;
   text: string;
   url?: string;
 };
