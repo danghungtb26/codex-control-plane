@@ -23,7 +23,7 @@ const codex = new CodexAppServerClient(
   config.codexAutoApprove,
 );
 const discord = new DiscordNotifier(config.discordWebhookUrl);
-const turnNotifier = new TurnNotifier(codex, discord, githubBindings);
+const turnNotifier = new TurnNotifier(codex, githubBindings, discord);
 await codex.start();
 
 const dispatcher = new ReviewDispatcher(resolver, codex, turnNotifier, config);
@@ -37,6 +37,30 @@ const rememberDelivery = (id: string) => {
     if (oldest) seenDeliveries.delete(oldest);
   }
   return false;
+};
+
+const resolveInterruptThread = async (body: Record<string, any>) => {
+  const directThreadId = String(body.threadId ?? "").trim();
+  if (directThreadId) return directThreadId;
+
+  const repo = String(body.repo ?? "").trim();
+  const issueNumber = Number(body.issueNumber);
+  const prNumber = Number(body.prNumber);
+  if (!repo) throw new Error("repo is required when threadId is not provided");
+
+  if (Number.isInteger(issueNumber)) {
+    const binding = await resolver.resolveIssue(repo, issueNumber);
+    if (!binding) throw new Error(`no existing Codex thread found for issue #${issueNumber}`);
+    return binding.threadId;
+  }
+
+  if (Number.isInteger(prNumber)) {
+    const binding = await resolver.resolvePr(repo, prNumber);
+    if (!binding) throw new Error(`no existing Codex thread found for PR #${prNumber}`);
+    return binding.threadId;
+  }
+
+  throw new Error("threadId, or repo with issueNumber/prNumber, is required");
 };
 
 const webhookServer = createServer(async (req, res) => {
@@ -92,6 +116,17 @@ const adminServer = createServer(async (req, res) => {
     if (req.method === "POST" && req.url === "/notifications/test") {
       await discord.sendTest();
       return sendJson(res, 200, { ok: true, provider: "discord" });
+    }
+
+    if (req.method === "POST" && req.url === "/interrupt") {
+      const body = JSON.parse((await readBody(req)).toString("utf8"));
+      try {
+        const threadId = await resolveInterruptThread(body);
+        const result = await codex.interrupt(threadId);
+        return sendJson(res, 200, result);
+      } catch (error) {
+        return sendJson(res, 400, { error: (error as Error).message });
+      }
     }
 
     if (req.method === "POST" && req.url === "/bindings") {
