@@ -113,6 +113,27 @@ export class ReviewDispatcher {
     });
   }
 
+  private async createPrBinding(message: DispatchMessage) {
+    const cwd = this.resolver.getWorkspace(message.repo);
+    if (!cwd) {
+      throw new Error(
+        `PR ${message.repo}#${message.number} has no durable Codex thread and no local workspace is known. Bind the repository once through POST /tasks or set REPO_WORKSPACES.`,
+      );
+    }
+
+    const { threadId } = await this.codex.startThread(cwd);
+    console.warn(
+      `[dispatcher] no durable binding for ${message.repo} PR #${message.number}; created replacement thread ${threadId}`,
+    );
+    return this.resolver.bind({
+      repo: message.repo,
+      kind: "pr",
+      number: message.number,
+      threadId,
+      cwd,
+    });
+  }
+
   private async ensureUsableBinding(binding: Binding): Promise<UsableBinding> {
     if (this.codex.getActiveTurn(binding.threadId)) return { binding };
 
@@ -120,7 +141,12 @@ export class ReviewDispatcher {
       await this.codex.resumeThread(binding.threadId);
       return { binding };
     } catch (error) {
-      if (!isMissingRolloutError(error)) throw error;
+      if (!isMissingRolloutError(error)) {
+        // Preserve the existing tracked failure path for every error except the
+        // explicit "rollout is gone" recovery case. codex.send() will retry the
+        // resume inside TurnNotifier.runTracked and report failure normally.
+        return { binding };
+      }
 
       const previousThreadId = binding.threadId;
       const { threadId } = await this.codex.startThread(binding.cwd);
@@ -241,14 +267,7 @@ export class ReviewDispatcher {
     const first = messages[0];
     if (!first) return;
 
-    const resolved = await this.resolver.resolvePr(first.repo, first.number);
-    if (!resolved) {
-      console.warn(
-        `[dispatcher] no durable thread binding for ${first.repo}#${first.number}; refusing to create a new PR conversation`,
-      );
-      return;
-    }
-
+    const resolved = (await this.resolver.resolvePr(first.repo, first.number)) ?? (await this.createPrBinding(first));
     const { binding, recoveredFromThreadId } = await this.ensureUsableBinding(resolved);
 
     if (first.action === "summary") {
