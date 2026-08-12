@@ -131,7 +131,25 @@ You can also start work directly from a normal GitHub Issue comment:
 
 The first Issue command creates a durable thread. Later `/codex` commands on the same Issue resume that thread.
 
-## Fix/review an existing PR
+## Send to an existing Issue or PR thread
+
+`POST /send` resumes an existing durable conversation. Supply exactly one of `issueNumber` or `prNumber`.
+
+Issue thread:
+
+```bash
+curl -sS http://127.0.0.1:8788/send \
+  -H 'content-type: application/json' \
+  -d '{
+    "repo": "my-org/my-repo",
+    "issueNumber": 245,
+    "message": "Continue working on this Issue thread."
+  }' | jq
+```
+
+This does not create a new Issue thread. If the Issue has no existing binding, use `/tasks` or post `/codex ...` on the Issue first.
+
+PR thread:
 
 ```bash
 curl -sS http://127.0.0.1:8788/send \
