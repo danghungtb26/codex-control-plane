@@ -32,10 +32,10 @@ const statusDot: Record<string, string> = {
 };
 
 const normalizeStatus = (value?: string) => {
-  const status = (value ?? "").toLowerCase();
-  if (["inprogress", "active", "running"].includes(status)) return "running";
-  if (["completed", "complete", "closed"].includes(status)) return "completed";
-  if (["failed", "systemerror", "error"].includes(status)) return "failed";
+  const status = (value ?? "").replace(/[_-]/g, "").toLowerCase();
+  if (["inprogress", "active", "running", "pendinginit", "pending"].includes(status)) return "running";
+  if (["completed", "complete", "closed", "shutdown"].includes(status)) return "completed";
+  if (["failed", "systemerror", "error", "errored", "notfound"].includes(status)) return "failed";
   if (status === "interrupted") return "interrupted";
   if (status === "cancelled" || status === "canceled") return "cancelled";
   if (["idle", "notloaded"].includes(status)) return "idle";
@@ -52,14 +52,23 @@ const objectStatus = (value: unknown) => {
   return "";
 };
 
+type CollabAgentRef = {
+  threadId?: string;
+  agentNickname?: string;
+  agentRole?: string;
+};
+
 type CollabItem = {
   tool?: string;
   status?: string;
   senderThreadId?: string;
   receiverThreadId?: string;
   newThreadId?: string;
+  receiverThreadIds?: string[];
+  receiverAgents?: CollabAgentRef[];
   prompt?: string;
   agentStatus?: unknown;
+  agentsStates?: Record<string, unknown>;
 };
 
 type SubagentSummary = {
@@ -67,6 +76,8 @@ type SubagentSummary = {
   prompt?: string;
   status: string;
   lastTool?: string;
+  nickname?: string;
+  role?: string;
 };
 
 const parseCollab = (event: DashboardEvent): CollabItem | null => {
@@ -79,6 +90,9 @@ const parseCollab = (event: DashboardEvent): CollabItem | null => {
       newThreadId: event.collabTool === "spawn_agent" ? event.agentThreadId : undefined,
       prompt: event.prompt,
       agentStatus: event.agentStatus,
+      receiverAgents: event.agentThreadId
+        ? [{ threadId: event.agentThreadId, agentNickname: event.agentNickname, agentRole: event.agentRole }]
+        : undefined,
     };
   }
 
@@ -93,7 +107,26 @@ const parseCollab = (event: DashboardEvent): CollabItem | null => {
   }
 };
 
-const collabThreadId = (item: CollabItem | null) => item?.newThreadId || item?.receiverThreadId || "";
+const collabThreadIds = (item: CollabItem | null) => {
+  if (!item) return [];
+  const values = [
+    item.newThreadId,
+    item.receiverThreadId,
+    ...(Array.isArray(item.receiverThreadIds) ? item.receiverThreadIds : []),
+    ...(Array.isArray(item.receiverAgents) ? item.receiverAgents.map((agent) => agent.threadId) : []),
+  ].filter((value): value is string => Boolean(value));
+  return [...new Set(values)];
+};
+
+const collabThreadId = (item: CollabItem | null) => collabThreadIds(item)[0] ?? "";
+
+const collabAgentStatus = (item: CollabItem, threadId: string) => {
+  const direct = item.agentsStates?.[threadId];
+  return objectStatus(direct) || objectStatus(item.agentStatus) || item.status || "";
+};
+
+const collabAgentRef = (item: CollabItem, threadId: string) =>
+  item.receiverAgents?.find((agent) => agent.threadId === threadId);
 
 const rootTask = (task: DashboardTask) => task.repo !== "unknown" || Boolean(task.issueNumber) || task.prNumbers.length > 0;
 
@@ -158,11 +191,11 @@ const SubagentCard = ({
 }) => {
   const collab = parseCollab(event);
   if (!collab) return null;
-  const threadId = collabThreadId(collab);
+  const threadId = summary?.threadId || collabThreadId(collab);
   const isSpawn = collab.tool === "spawn_agent";
-  const status = summary?.status ?? normalizeStatus(objectStatus(collab.agentStatus) || collab.status);
+  const status = summary?.status ?? normalizeStatus(threadId ? collabAgentStatus(collab, threadId) : collab.status);
   const running = status === "running";
-  const title = isSpawn ? (threadId ? "Subagent" : "Spawning subagent") : `Subagent · ${collab.tool ?? "activity"}`;
+  const title = summary?.nickname || (isSpawn ? (threadId ? "Subagent" : "Spawning subagent") : `Subagent · ${collab.tool ?? "activity"}`);
   const prompt = collab.prompt || summary?.prompt;
 
   return (
@@ -186,6 +219,7 @@ const SubagentCard = ({
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-sm font-medium text-slate-100">{title}</span>
+            {summary?.role ? <span className="text-[11px] text-violet-300/60">[{summary.role}]</span> : null}
             <StatusBadge status={status} />
           </div>
           {threadId ? <div className="mt-1 font-mono text-[10px] text-slate-600">{shortThread(threadId)}</div> : null}
@@ -344,14 +378,20 @@ const activeToolIdsFrom = (events: DashboardEvent[]) => {
 };
 
 const visibleEventsFrom = (events: DashboardEvent[], activeToolIds: Set<string>) => {
-  const latestCollabByItem = new Map<string, string>();
+  const latestCollabByThread = new Map<string, string>();
   for (const event of events) {
-    if (event.itemId && parseCollab(event)) latestCollabByItem.set(event.itemId, event.id);
+    const collab = parseCollab(event);
+    for (const threadId of collabThreadIds(collab)) latestCollabByThread.set(threadId, event.id);
   }
 
   return events.filter((event) => {
     if (event.type === "subagent.thread") return false;
-    if (event.itemId && parseCollab(event)) return latestCollabByItem.get(event.itemId) === event.id;
+    const collab = parseCollab(event);
+    if (collab) {
+      const ids = collabThreadIds(collab);
+      if (!ids.length) return true;
+      return ids.some((threadId) => latestCollabByThread.get(threadId) === event.id);
+    }
     return event.type !== "tool.started" || !event.itemId || activeToolIds.has(event.itemId);
   });
 };
@@ -516,24 +556,20 @@ export default function App() {
     const byThread = new Map<string, SubagentSummary>();
     for (const event of events) {
       const collab = parseCollab(event);
-      const threadId = collabThreadId(collab);
-      if (!collab || !threadId) continue;
-      const current = byThread.get(threadId);
-      const explicitAgentStatus = objectStatus(collab.agentStatus);
-      let status = current?.status ?? "running";
-      if (explicitAgentStatus) {
-        status = normalizeStatus(explicitAgentStatus);
-      } else if (collab.tool === "spawn_agent") {
-        status = collab.status === "failed" ? "failed" : "running";
-      } else if (collab.status === "failed") {
-        status = "failed";
+      if (!collab) continue;
+      for (const threadId of collabThreadIds(collab)) {
+        const current = byThread.get(threadId);
+        const agentRef = collabAgentRef(collab, threadId);
+        const status = normalizeStatus(collabAgentStatus(collab, threadId) || current?.status || "running");
+        byThread.set(threadId, {
+          threadId,
+          prompt: collab.prompt || current?.prompt,
+          status,
+          lastTool: collab.tool || current?.lastTool,
+          nickname: agentRef?.agentNickname || current?.nickname,
+          role: agentRef?.agentRole || current?.role,
+        });
       }
-      byThread.set(threadId, {
-        threadId,
-        prompt: collab.prompt || current?.prompt,
-        status,
-        lastTool: collab.tool || current?.lastTool,
-      });
     }
     return byThread;
   }, [events]);
@@ -788,12 +824,14 @@ export default function App() {
                         <div className="min-w-0 flex-1">
                           <div className="flex flex-wrap items-center gap-2">
                             <h3 className="truncate text-sm font-semibold text-white">
-                              {agentThread?.agentNickname || "Subagent"}
+                              {agentThread?.agentNickname || selectedAgentSummary?.nickname || "Subagent"}
                             </h3>
                             <StatusBadge status={selectedAgentStatus} />
                           </div>
                           <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
-                            {agentThread?.agentRole ? <span>{agentThread.agentRole}</span> : null}
+                            {agentThread?.agentRole || selectedAgentSummary?.role ? (
+                              <span>{agentThread?.agentRole || selectedAgentSummary?.role}</span>
+                            ) : null}
                             <span className="font-mono" title={selectedAgentThreadId}>
                               {shortThread(selectedAgentThreadId)}
                             </span>
