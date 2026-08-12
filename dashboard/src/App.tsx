@@ -7,8 +7,8 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { fetchTaskEvents, fetchTasks } from "./api";
-import type { DashboardEvent, DashboardTask } from "./types";
+import { fetchAgentThread, fetchTaskEvents, fetchTasks } from "./api";
+import type { AgentThread, DashboardEvent, DashboardTask } from "./types";
 
 const shortSha = (sha?: string) => (sha ? sha.slice(0, 10) : "—");
 const shortThread = (threadId: string) => `${threadId.slice(0, 8)}…${threadId.slice(-5)}`;
@@ -31,19 +31,86 @@ const statusDot: Record<string, string> = {
   idle: "bg-slate-500",
 };
 
+const normalizeStatus = (value?: string) => {
+  const status = (value ?? "").toLowerCase();
+  if (["inprogress", "active", "running"].includes(status)) return "running";
+  if (["completed", "complete", "closed"].includes(status)) return "completed";
+  if (["failed", "systemerror", "error"].includes(status)) return "failed";
+  if (status === "interrupted") return "interrupted";
+  if (status === "cancelled" || status === "canceled") return "cancelled";
+  if (["idle", "notloaded"].includes(status)) return "idle";
+  return value || "idle";
+};
+
+const objectStatus = (value: unknown) => {
+  if (typeof value === "string") return value;
+  if (!value || typeof value !== "object") return "";
+  const status = value as Record<string, unknown>;
+  if (typeof status.type === "string") return status.type;
+  if (typeof status.status === "string") return status.status;
+  if (typeof status.state === "string") return status.state;
+  return "";
+};
+
+type CollabItem = {
+  tool?: string;
+  status?: string;
+  senderThreadId?: string;
+  receiverThreadId?: string;
+  newThreadId?: string;
+  prompt?: string;
+  agentStatus?: unknown;
+};
+
+type SubagentSummary = {
+  threadId: string;
+  prompt?: string;
+  status: string;
+  lastTool?: string;
+};
+
+const parseCollab = (event: DashboardEvent): CollabItem | null => {
+  if (event.type === "subagent.activity") {
+    return {
+      tool: event.collabTool,
+      status: event.status,
+      senderThreadId: event.parentThreadId,
+      receiverThreadId: event.agentThreadId,
+      newThreadId: event.collabTool === "spawn_agent" ? event.agentThreadId : undefined,
+      prompt: event.prompt,
+      agentStatus: event.agentStatus,
+    };
+  }
+
+  if ((event.type !== "tool.started" && event.type !== "tool.completed") || event.toolName !== "collabToolCall") {
+    return null;
+  }
+
+  try {
+    return JSON.parse(event.detail ?? "") as CollabItem;
+  } catch {
+    return null;
+  }
+};
+
+const collabThreadId = (item: CollabItem | null) => item?.newThreadId || item?.receiverThreadId || "";
+
+const rootTask = (task: DashboardTask) => task.repo !== "unknown" || Boolean(task.issueNumber) || task.prNumbers.length > 0;
+
 const StatusBadge = ({ status }: { status: string }) => {
-  const running = status === "running";
-  const dotClass = statusDot[status] ?? statusDot.idle;
+  const normalized = normalizeStatus(status);
+  const running = normalized === "running";
+  const dotClass = statusDot[normalized] ?? statusDot.idle;
 
   return (
     <span
-      className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide ${statusClasses[status] ?? statusClasses.idle}`}
+      className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide ${statusClasses[normalized] ?? statusClasses.idle}`}
     >
       <span className="relative flex h-1.5 w-1.5">
         {running ? <span className={`absolute inline-flex h-full w-full animate-ping rounded-full opacity-60 ${dotClass}`} /> : null}
         <span className={`relative inline-flex h-1.5 w-1.5 rounded-full ${dotClass}`} />
       </span>
-      {status}
+      {normalized}
     </span>
   );
 };
@@ -77,12 +144,78 @@ const UserMessage = ({ event, historical = false }: { event: DashboardEvent; his
 };
 
 const ToolSpinner = () => (
-  <span className="relative h-3.5 w-3.5 shrink-0 rounded-full border border-sky-300/30 border-t-sky-300 animate-spin" />
+  <span className="relative h-3.5 w-3.5 shrink-0 animate-spin rounded-full border border-sky-300/30 border-t-sky-300" />
 );
 
-const TranscriptEvent = ({ event, activeTool = false }: { event: DashboardEvent; activeTool?: boolean }) => {
-  const time = new Date(event.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+const SubagentCard = ({
+  event,
+  summary,
+  onOpen,
+}: {
+  event: DashboardEvent;
+  summary?: SubagentSummary;
+  onOpen?: (threadId: string) => void;
+}) => {
+  const collab = parseCollab(event);
+  if (!collab) return null;
+  const threadId = collabThreadId(collab);
+  const isSpawn = collab.tool === "spawn_agent";
+  const status = summary?.status ?? normalizeStatus(objectStatus(collab.agentStatus) || collab.status);
+  const running = status === "running";
+  const title = isSpawn ? (threadId ? "Subagent" : "Spawning subagent") : `Subagent · ${collab.tool ?? "activity"}`;
+  const prompt = collab.prompt || summary?.prompt;
 
+  return (
+    <button
+      type="button"
+      disabled={!threadId || !onOpen}
+      onClick={() => threadId && onOpen?.(threadId)}
+      className={`w-full rounded-2xl border px-4 py-3 text-left transition-all duration-300 ${
+        running
+          ? "border-violet-400/25 bg-violet-400/[0.055] shadow-[0_0_30px_rgba(167,139,250,.05)]"
+          : "border-slate-700/80 bg-slate-900/70"
+      } ${threadId && onOpen ? "cursor-pointer hover:border-violet-400/40 hover:bg-violet-400/[0.075]" : "cursor-default"}`}
+    >
+      <div className="flex items-center gap-3">
+        <span className="relative flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-violet-400/20 bg-violet-400/10 text-sm text-violet-200">
+          {running ? (
+            <span className="absolute inset-1 animate-ping rounded-lg border border-violet-400/20" />
+          ) : null}
+          <span className="relative">↳</span>
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-sm font-medium text-slate-100">{title}</span>
+            <StatusBadge status={status} />
+          </div>
+          {threadId ? <div className="mt-1 font-mono text-[10px] text-slate-600">{shortThread(threadId)}</div> : null}
+        </div>
+        {threadId && onOpen ? <span className="text-xs text-violet-300/70">Open →</span> : null}
+      </div>
+      {prompt ? <p className="mt-3 line-clamp-3 text-xs leading-5 text-slate-400">{prompt}</p> : null}
+    </button>
+  );
+};
+
+const TranscriptEvent = ({
+  event,
+  activeTool = false,
+  subagent,
+  onOpenAgent,
+}: {
+  event: DashboardEvent;
+  activeTool?: boolean;
+  subagent?: SubagentSummary;
+  onOpenAgent?: (threadId: string) => void;
+}) => {
+  const time = new Date(event.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const collab = parseCollab(event);
+
+  if (collab) {
+    return <SubagentCard event={event} summary={subagent} onOpen={onOpenAgent} />;
+  }
+
+  if (event.type === "subagent.thread") return null;
   if (event.type === "task.started") return <UserMessage event={event} />;
   if (event.type === "user.message") return <UserMessage event={event} historical />;
 
@@ -169,13 +302,29 @@ const TranscriptEvent = ({ event, activeTool = false }: { event: DashboardEvent;
   return null;
 };
 
-const WorkingIndicator = () => (
+const LiveAgentMessage = ({ text, label = "Codex · live" }: { text: string; label?: string }) => (
+  <article className="rounded-2xl border border-emerald-400/20 bg-emerald-400/5 p-4 shadow-[0_0_30px_rgba(16,185,129,.04)] transition-shadow">
+    <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-emerald-300">
+      <span className="relative flex h-1.5 w-1.5">
+        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-50" />
+        <span className="relative h-1.5 w-1.5 rounded-full bg-emerald-400" />
+      </span>
+      {label}
+    </div>
+    <p className="whitespace-pre-wrap text-sm leading-6 text-slate-200">
+      {text}
+      <span className="ml-0.5 inline-block h-4 w-1 animate-pulse bg-emerald-400 align-middle" />
+    </p>
+  </article>
+);
+
+const WorkingIndicator = ({ label = "Codex is working" }: { label?: string }) => (
   <div className="flex items-center gap-3 rounded-2xl border border-sky-400/15 bg-sky-400/[0.035] px-4 py-3 text-xs text-sky-200/80">
     <span className="relative flex h-2 w-2">
       <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-sky-400 opacity-50" />
       <span className="relative inline-flex h-2 w-2 rounded-full bg-sky-400" />
     </span>
-    <span>Codex is working</span>
+    <span>{label}</span>
     <span className="flex items-end gap-1" aria-hidden="true">
       <span className="h-1 w-1 animate-bounce rounded-full bg-sky-300 [animation-delay:-0.3s]" />
       <span className="h-1 w-1 animate-bounce rounded-full bg-sky-300 [animation-delay:-0.15s]" />
@@ -183,6 +332,29 @@ const WorkingIndicator = () => (
     </span>
   </div>
 );
+
+const activeToolIdsFrom = (events: DashboardEvent[]) => {
+  const active = new Set<string>();
+  for (const event of events) {
+    if (!event.itemId || parseCollab(event)) continue;
+    if (event.type === "tool.started") active.add(event.itemId);
+    if (event.type === "tool.completed") active.delete(event.itemId);
+  }
+  return active;
+};
+
+const visibleEventsFrom = (events: DashboardEvent[], activeToolIds: Set<string>) => {
+  const latestCollabByItem = new Map<string, string>();
+  for (const event of events) {
+    if (event.itemId && parseCollab(event)) latestCollabByItem.set(event.itemId, event.id);
+  }
+
+  return events.filter((event) => {
+    if (event.type === "subagent.thread") return false;
+    if (event.itemId && parseCollab(event)) return latestCollabByItem.get(event.itemId) === event.id;
+    return event.type !== "tool.started" || !event.itemId || activeToolIds.has(event.itemId);
+  });
+};
 
 export default function App() {
   const [tasks, setTasks] = useState<DashboardTask[]>([]);
@@ -193,15 +365,21 @@ export default function App() {
   const [search, setSearch] = useState("");
   const [error, setError] = useState("");
   const [followingTail, setFollowingTail] = useState(true);
+  const [selectedAgentThreadId, setSelectedAgentThreadId] = useState("");
+  const [agentThread, setAgentThread] = useState<AgentThread | null>(null);
+  const [agentEvents, setAgentEvents] = useState<DashboardEvent[]>([]);
+  const [agentLiveText, setAgentLiveText] = useState<Record<string, string>>({});
+  const [agentLoading, setAgentLoading] = useState(false);
   const transcriptRef = useRef<HTMLDivElement>(null);
+  const agentTranscriptRef = useRef<HTMLDivElement>(null);
   const followTailRef = useRef(true);
 
   const reloadTasks = useCallback(async () => {
     try {
-      const next = await fetchTasks();
+      const next = (await fetchTasks()).filter(rootTask);
       setTasks(next);
       setError("");
-      setSelectedThreadId((current) => current || next[0]?.threadId || "");
+      setSelectedThreadId((current) => (current && next.some((task) => task.threadId === current) ? current : next[0]?.threadId || ""));
     } catch (nextError) {
       setError((nextError as Error).message);
     }
@@ -213,6 +391,10 @@ export default function App() {
 
   useEffect(() => {
     setLiveText({});
+    setSelectedAgentThreadId("");
+    setAgentThread(null);
+    setAgentEvents([]);
+    setAgentLiveText({});
     followTailRef.current = true;
     setFollowingTail(true);
 
@@ -233,6 +415,24 @@ export default function App() {
     };
   }, [selectedThreadId]);
 
+  const openAgent = useCallback(async (threadId: string) => {
+    setSelectedAgentThreadId(threadId);
+    setAgentThread(null);
+    setAgentEvents([]);
+    setAgentLiveText({});
+    setAgentLoading(true);
+    try {
+      const result = await fetchAgentThread(threadId);
+      setAgentThread(result.thread);
+      setAgentEvents(result.events);
+      setError("");
+    } catch (nextError) {
+      setError((nextError as Error).message);
+    } finally {
+      setAgentLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     const source = new EventSource("/api/events");
     source.addEventListener("connected", () => setConnected(true));
@@ -240,30 +440,45 @@ export default function App() {
     source.onerror = () => setConnected(false);
     source.onmessage = (message) => {
       const event = JSON.parse(message.data) as DashboardEvent;
+      const liveKey = `${event.turnId ?? "turn"}:${event.itemId ?? "agent"}`;
 
       if (event.type === "agent.delta") {
         if (event.threadId === selectedThreadId && event.text) {
-          const key = `${event.turnId ?? "turn"}:${event.itemId ?? "agent"}`;
-          setLiveText((current) => ({ ...current, [key]: `${current[key] ?? ""}${event.text}` }));
+          setLiveText((current) => ({ ...current, [liveKey]: `${current[liveKey] ?? ""}${event.text}` }));
+        }
+        if (event.threadId === selectedAgentThreadId && event.text) {
+          setAgentLiveText((current) => ({ ...current, [liveKey]: `${current[liveKey] ?? ""}${event.text}` }));
         }
         return;
       }
 
+      const clearCompletedLive = (setter: typeof setLiveText) => {
+        if (event.type !== "agent.message") return;
+        setter((current) => {
+          const next = { ...current };
+          delete next[liveKey];
+          if (!event.itemId && event.turnId) {
+            for (const key of Object.keys(next)) {
+              if (key.startsWith(`${event.turnId}:`)) delete next[key];
+            }
+          }
+          return next;
+        });
+      };
+
       if (event.threadId === selectedThreadId) {
         setEvents((current) => (current.some((item) => item.id === event.id) ? current : [...current, event]));
+        clearCompletedLive(setLiveText);
+      }
 
-        if (event.type === "agent.message") {
-          setLiveText((current) => {
-            const next = { ...current };
-            const exactKey = `${event.turnId ?? "turn"}:${event.itemId ?? "agent"}`;
-            delete next[exactKey];
-            if (!event.itemId && event.turnId) {
-              for (const key of Object.keys(next)) {
-                if (key.startsWith(`${event.turnId}:`)) delete next[key];
-              }
-            }
-            return next;
-          });
+      if (event.threadId === selectedAgentThreadId) {
+        setAgentEvents((current) => (current.some((item) => item.id === event.id) ? current : [...current, event]));
+        clearCompletedLive(setAgentLiveText);
+        if (event.type === "turn.started") {
+          setAgentThread((current) => (current ? { ...current, status: "running" } : current));
+        }
+        if (event.type === "turn.completed") {
+          setAgentThread((current) => (current ? { ...current, status: event.status || "completed" } : current));
         }
       }
 
@@ -271,7 +486,7 @@ export default function App() {
     };
 
     return () => source.close();
-  }, [reloadTasks, selectedThreadId]);
+  }, [reloadTasks, selectedAgentThreadId, selectedThreadId]);
 
   const filteredTasks = useMemo(() => {
     const needle = search.trim().toLowerCase();
@@ -295,29 +510,46 @@ export default function App() {
 
   const selected = tasks.find((task) => task.threadId === selectedThreadId);
   const liveEntries = Object.entries(liveText).filter(([, text]) => text.trim());
+  const agentLiveEntries = Object.entries(agentLiveText).filter(([, text]) => text.trim());
 
-  const activeToolIds = useMemo(() => {
-    const active = new Set<string>();
+  const subagents = useMemo(() => {
+    const byThread = new Map<string, SubagentSummary>();
     for (const event of events) {
-      if (!event.itemId) continue;
-      if (event.type === "tool.started") active.add(event.itemId);
-      if (event.type === "tool.completed") active.delete(event.itemId);
+      const collab = parseCollab(event);
+      const threadId = collabThreadId(collab);
+      if (!collab || !threadId) continue;
+      const current = byThread.get(threadId);
+      const explicitAgentStatus = objectStatus(collab.agentStatus);
+      let status = current?.status ?? "running";
+      if (explicitAgentStatus) {
+        status = normalizeStatus(explicitAgentStatus);
+      } else if (collab.tool === "spawn_agent") {
+        status = collab.status === "failed" ? "failed" : "running";
+      } else if (collab.status === "failed") {
+        status = "failed";
+      }
+      byThread.set(threadId, {
+        threadId,
+        prompt: collab.prompt || current?.prompt,
+        status,
+        lastTool: collab.tool || current?.lastTool,
+      });
     }
-    return active;
+    return byThread;
   }, [events]);
 
-  const visibleEvents = useMemo(
-    () =>
-      events.filter(
-        (event) =>
-          event.type !== "tool.started" ||
-          !event.itemId ||
-          activeToolIds.has(event.itemId),
-      ),
-    [activeToolIds, events],
-  );
+  const selectedAgentSummary = selectedAgentThreadId ? subagents.get(selectedAgentThreadId) : undefined;
+  const selectedAgentStatus = normalizeStatus(selectedAgentSummary?.status || agentThread?.status);
 
+  const activeToolIds = useMemo(() => activeToolIdsFrom(events), [events]);
+  const agentActiveToolIds = useMemo(() => activeToolIdsFrom(agentEvents), [agentEvents]);
+  const visibleEvents = useMemo(() => visibleEventsFrom(events, activeToolIds), [activeToolIds, events]);
+  const visibleAgentEvents = useMemo(
+    () => visibleEventsFrom(agentEvents, agentActiveToolIds),
+    [agentActiveToolIds, agentEvents],
+  );
   const hasActiveTool = activeToolIds.size > 0;
+  const hasAgentActiveTool = agentActiveToolIds.size > 0;
 
   const scrollToLatest = useCallback((behavior: ScrollBehavior = "auto") => {
     const node = transcriptRef.current;
@@ -341,6 +573,13 @@ export default function App() {
     const frame = requestAnimationFrame(() => scrollToLatest("auto"));
     return () => cancelAnimationFrame(frame);
   }, [events, liveText, scrollToLatest, selectedThreadId]);
+
+  useLayoutEffect(() => {
+    const node = agentTranscriptRef.current;
+    if (!node) return;
+    const frame = requestAnimationFrame(() => node.scrollTo({ top: node.scrollHeight, behavior: "auto" }));
+    return () => cancelAnimationFrame(frame);
+  }, [agentEvents, agentLiveText, selectedAgentThreadId]);
 
   return (
     <div className="min-h-screen text-slate-200">
@@ -380,7 +619,7 @@ export default function App() {
           <div className="min-h-0 flex-1 overflow-y-auto p-2">
             {filteredTasks.map((task) => {
               const active = task.threadId === selectedThreadId;
-              const running = task.status === "running";
+              const running = normalizeStatus(task.status) === "running";
 
               return (
                 <button
@@ -437,10 +676,15 @@ export default function App() {
                     <div className="mb-2 flex flex-wrap items-center gap-2">
                       <StatusBadge status={selected.status} />
                       {selected.action ? <span className="text-xs font-medium text-slate-400">{selected.action}</span> : null}
-                      {selected.status === "running" ? (
+                      {normalizeStatus(selected.status) === "running" ? (
                         <span className="flex items-center gap-1.5 text-[11px] text-sky-300/70">
                           <span className="h-1 w-1 animate-bounce rounded-full bg-sky-300" />
                           activity streaming
+                        </span>
+                      ) : null}
+                      {subagents.size ? (
+                        <span className="rounded-full border border-violet-400/15 bg-violet-400/5 px-2 py-0.5 text-[11px] text-violet-300/80">
+                          {subagents.size} agent{subagents.size === 1 ? "" : "s"}
                         </span>
                       ) : null}
                     </div>
@@ -478,60 +722,127 @@ export default function App() {
                 ) : null}
               </div>
 
-              <div className="relative min-h-0 flex-1">
-                <div
-                  ref={transcriptRef}
-                  onScroll={handleTranscriptScroll}
-                  className="h-full overflow-y-auto"
-                  aria-live="polite"
-                >
-                  <div className="mx-auto flex max-w-4xl flex-col gap-3 p-5 pb-12">
-                    {visibleEvents.map((event) => (
-                      <TranscriptEvent
-                        key={event.id}
-                        event={event}
-                        activeTool={event.type === "tool.started" && Boolean(event.itemId && activeToolIds.has(event.itemId))}
-                      />
-                    ))}
+              <div className="relative flex min-h-0 flex-1 overflow-hidden">
+                <div className="relative min-w-0 flex-1">
+                  <div
+                    ref={transcriptRef}
+                    onScroll={handleTranscriptScroll}
+                    className="h-full overflow-y-auto"
+                    aria-live="polite"
+                  >
+                    <div className="mx-auto flex max-w-4xl flex-col gap-3 p-5 pb-12">
+                      {visibleEvents.map((event) => {
+                        const collab = parseCollab(event);
+                        const agentId = collabThreadId(collab);
+                        return (
+                          <TranscriptEvent
+                            key={event.id}
+                            event={event}
+                            activeTool={event.type === "tool.started" && Boolean(event.itemId && activeToolIds.has(event.itemId))}
+                            subagent={agentId ? subagents.get(agentId) : undefined}
+                            onOpenAgent={openAgent}
+                          />
+                        );
+                      })}
 
-                    {liveEntries.map(([key, text]) => (
-                      <article
-                        key={key}
-                        className="rounded-2xl border border-emerald-400/20 bg-emerald-400/5 p-4 shadow-[0_0_30px_rgba(16,185,129,.04)] transition-shadow"
-                      >
-                        <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-emerald-300">
-                          <span className="relative flex h-1.5 w-1.5">
-                            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-50" />
-                            <span className="relative h-1.5 w-1.5 rounded-full bg-emerald-400" />
-                          </span>
-                          Codex · live
+                      {liveEntries.map(([key, text]) => (
+                        <LiveAgentMessage key={key} text={text} />
+                      ))}
+
+                      {normalizeStatus(selected.status) === "running" && !liveEntries.length && !hasActiveTool ? (
+                        <WorkingIndicator />
+                      ) : null}
+
+                      {!events.length && !liveEntries.length && normalizeStatus(selected.status) !== "running" ? (
+                        <div className="rounded-2xl border border-dashed border-slate-800 p-10 text-center text-sm text-slate-600">
+                          No transcript is available for this thread yet. New activity will appear here in realtime.
                         </div>
-                        <p className="whitespace-pre-wrap text-sm leading-6 text-slate-200">
-                          {text}
-                          <span className="ml-0.5 inline-block h-4 w-1 animate-pulse bg-emerald-400 align-middle" />
-                        </p>
-                      </article>
-                    ))}
-
-                    {selected.status === "running" && !liveEntries.length && !hasActiveTool ? <WorkingIndicator /> : null}
-
-                    {!events.length && !liveEntries.length && selected.status !== "running" ? (
-                      <div className="rounded-2xl border border-dashed border-slate-800 p-10 text-center text-sm text-slate-600">
-                        No transcript is available for this thread yet. New activity will appear here in realtime.
-                      </div>
-                    ) : null}
+                      ) : null}
+                    </div>
                   </div>
+
+                  {!followingTail ? (
+                    <button
+                      type="button"
+                      onClick={() => scrollToLatest("smooth")}
+                      className="absolute bottom-5 left-1/2 -translate-x-1/2 rounded-full border border-slate-700 bg-slate-900/95 px-3 py-1.5 text-xs font-medium text-slate-200 shadow-xl shadow-black/30 backdrop-blur transition hover:border-sky-400/40 hover:text-white"
+                    >
+                      ↓ Latest
+                      {normalizeStatus(selected.status) === "running" ? (
+                        <span className="ml-2 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-sky-400" />
+                      ) : null}
+                    </button>
+                  ) : null}
                 </div>
 
-                {!followingTail ? (
-                  <button
-                    type="button"
-                    onClick={() => scrollToLatest("smooth")}
-                    className="absolute bottom-5 left-1/2 -translate-x-1/2 rounded-full border border-slate-700 bg-slate-900/95 px-3 py-1.5 text-xs font-medium text-slate-200 shadow-xl shadow-black/30 backdrop-blur transition hover:border-sky-400/40 hover:text-white"
-                  >
-                    ↓ Latest
-                    {selected.status === "running" ? <span className="ml-2 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-sky-400" /> : null}
-                  </button>
+                {selectedAgentThreadId ? (
+                  <aside className="absolute inset-y-0 right-0 z-20 flex w-full flex-col border-l border-slate-800 bg-slate-950/98 shadow-2xl shadow-black/40 md:static md:w-[46%] md:min-w-[380px] md:max-w-[680px] md:bg-slate-950/70 md:shadow-none">
+                    <div className="border-b border-slate-800 px-4 py-3">
+                      <div className="flex items-start gap-3">
+                        <div className="relative mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-violet-400/20 bg-violet-400/10 text-violet-200">
+                          {selectedAgentStatus === "running" ? (
+                            <span className="absolute inset-1 animate-ping rounded-lg border border-violet-400/20" />
+                          ) : null}
+                          <span className="relative">↳</span>
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <h3 className="truncate text-sm font-semibold text-white">
+                              {agentThread?.agentNickname || "Subagent"}
+                            </h3>
+                            <StatusBadge status={selectedAgentStatus} />
+                          </div>
+                          <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
+                            {agentThread?.agentRole ? <span>{agentThread.agentRole}</span> : null}
+                            <span className="font-mono" title={selectedAgentThreadId}>
+                              {shortThread(selectedAgentThreadId)}
+                            </span>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedAgentThreadId("")}
+                          className="rounded-lg border border-slate-800 bg-slate-900/70 px-2 py-1 text-xs text-slate-400 transition hover:border-slate-600 hover:text-white"
+                          aria-label="Close agent panel"
+                        >
+                          ×
+                        </button>
+                      </div>
+                      {selectedAgentSummary?.prompt ? (
+                        <p className="mt-3 rounded-xl border border-violet-400/10 bg-violet-400/[0.035] px-3 py-2 text-xs leading-5 text-slate-400">
+                          {selectedAgentSummary.prompt}
+                        </p>
+                      ) : null}
+                    </div>
+
+                    <div ref={agentTranscriptRef} className="min-h-0 flex-1 overflow-y-auto">
+                      <div className="flex flex-col gap-3 p-4 pb-10">
+                        {agentLoading && !agentEvents.length ? <WorkingIndicator label="Loading agent activity" /> : null}
+
+                        {visibleAgentEvents.map((event) => (
+                          <TranscriptEvent
+                            key={event.id}
+                            event={event}
+                            activeTool={event.type === "tool.started" && Boolean(event.itemId && agentActiveToolIds.has(event.itemId))}
+                          />
+                        ))}
+
+                        {agentLiveEntries.map(([key, text]) => (
+                          <LiveAgentMessage key={key} text={text} label="Agent · live" />
+                        ))}
+
+                        {selectedAgentStatus === "running" && !agentLiveEntries.length && !hasAgentActiveTool && !agentLoading ? (
+                          <WorkingIndicator label="Agent is working" />
+                        ) : null}
+
+                        {!agentLoading && !agentEvents.length && !agentLiveEntries.length ? (
+                          <div className="rounded-2xl border border-dashed border-slate-800 p-8 text-center text-xs leading-5 text-slate-600">
+                            No agent transcript is available yet. Realtime activity will appear here when the child thread emits events.
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+                  </aside>
                 ) : null}
               </div>
             </>
