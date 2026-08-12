@@ -27,6 +27,15 @@ const withTimeout = <T>(promise: Promise<T>, milliseconds: number) =>
     }),
   ]);
 
+const asString = (value: unknown) => (typeof value === "string" ? value : "");
+
+const threadStatus = (value: unknown) => {
+  if (typeof value === "string") return value;
+  if (!value || typeof value !== "object") return "unknown";
+  const status = value as Record<string, unknown>;
+  return asString(status.type) || asString(status.status) || "unknown";
+};
+
 export class DashboardHttp {
   private readonly distPath = path.resolve("dashboard/dist");
 
@@ -54,6 +63,29 @@ export class DashboardHttp {
         console.warn(`[dashboard] history unavailable for ${threadId}:`, (error as Error).message);
       }
       sendJson(res, 200, this.dashboard.mergeThreadHistory(threadId, thread));
+      return true;
+    }
+
+    const threadMatch = url.pathname.match(/^\/api\/threads\/([^/]+)$/);
+    if (req.method === "GET" && threadMatch) {
+      const threadId = decodeURIComponent(threadMatch[1]);
+      let thread: Record<string, any> | null = null;
+      try {
+        thread = await withTimeout(this.codex.readThread(threadId, true), 5000);
+      } catch (error) {
+        console.warn(`[dashboard] agent thread unavailable for ${threadId}:`, (error as Error).message);
+      }
+
+      sendJson(res, 200, {
+        thread: {
+          id: threadId,
+          parentThreadId: asString(thread?.parentThreadId) || undefined,
+          agentNickname: asString(thread?.agentNickname) || undefined,
+          agentRole: asString(thread?.agentRole) || undefined,
+          status: threadStatus(thread?.status),
+        },
+        events: this.dashboard.mergeThreadHistory(threadId, thread),
+      });
       return true;
     }
 
