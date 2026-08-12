@@ -6,8 +6,11 @@ import type { GithubBindingRegistry, GithubReportReceipt } from "./github-bindin
 
 const execFileAsync = promisify(execFile);
 
-type TurnRegistration = DiscordNotificationTarget & {
+type TurnRunContext = DiscordNotificationTarget & {
   cwd: string;
+};
+
+type TurnRegistration = TurnRunContext & {
   commitBefore: string;
 };
 
@@ -80,6 +83,49 @@ export class TurnNotifier {
   register(turnId: string, context: TurnRegistration) {
     if (!turnId) return;
     this.contexts.set(turnId, context);
+  }
+
+  async runTracked<T extends { turnId: string }>(
+    context: TurnRunContext,
+    run: () => Promise<T>,
+  ): Promise<T> {
+    const commitBefore = await readGitHead(context.cwd);
+
+    try {
+      await this.discord.sendStarted({
+        repo: context.repo,
+        kind: context.kind,
+        number: context.number,
+        threadId: context.threadId,
+        action: context.action,
+        request: context.request,
+        commitBefore,
+      });
+    } catch (error) {
+      console.error("[discord] start notification failed:", (error as Error).message);
+    }
+
+    try {
+      const turn = await run();
+      this.register(turn.turnId, { ...context, commitBefore });
+      return turn;
+    } catch (error) {
+      try {
+        await this.discord.sendFailure({
+          repo: context.repo,
+          kind: context.kind,
+          number: context.number,
+          threadId: context.threadId,
+          action: context.action,
+          request: context.request,
+          commitBefore,
+          error: (error as Error).message,
+        });
+      } catch (notifyError) {
+        console.error("[discord] failure notification failed:", (notifyError as Error).message);
+      }
+      throw error;
+    }
   }
 
   private async resolveCodexReceipt(
