@@ -84,7 +84,7 @@ a {
   }
 
   main {
-    height: calc(100dvh - 65px) !important;
+    height: calc(100dvh - 57px) !important;
     min-height: 0;
   }
 
