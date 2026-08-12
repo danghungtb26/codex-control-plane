@@ -20,7 +20,7 @@ const githubBindings = new GithubBindingRegistry(config.ghBin);
 const resolver = new BindingResolver(store, githubBindings, config);
 const codex = new CodexAppServerClient(config.codexBin, config.codexAllowNetwork);
 const discord = new DiscordNotifier(config.discordWebhookUrl);
-const turnNotifier = new TurnNotifier(codex, discord);
+const turnNotifier = new TurnNotifier(codex, githubBindings, discord);
 await codex.start();
 
 const dispatcher = new ReviewDispatcher(resolver, codex, turnNotifier, config);
