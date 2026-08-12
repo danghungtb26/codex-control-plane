@@ -58,7 +58,6 @@ export const loadConfig = () => {
     codexAllowNetwork: readBool("CODEX_ALLOW_NETWORK", false),
     codexAutoApprove: readBool("CODEX_AUTO_APPROVE", true),
     reviewDebounceMs: readInt("REVIEW_DEBOUNCE_MS", 1200),
-    forwardInlineReviewComments: readBool("FORWARD_INLINE_REVIEW_COMMENTS", true),
   };
 };
 
