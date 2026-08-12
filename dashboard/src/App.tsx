@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import { fetchAgentThread, fetchTaskEvents, fetchTasks } from "./api";
+import { MarkdownText } from "./MarkdownText";
 import type { AgentThread, DashboardEvent, DashboardTask } from "./types";
 
 const shortSha = (sha?: string) => (sha ? sha.slice(0, 10) : "—");
@@ -262,7 +263,7 @@ const TranscriptEvent = ({
           </span>
           <span className="text-[11px] text-slate-500">{time}</span>
         </div>
-        <p className="whitespace-pre-wrap text-sm leading-6 text-slate-200">{event.text}</p>
+        <MarkdownText text={event.text ?? ""} />
       </article>
     );
   }
@@ -345,10 +346,7 @@ const LiveAgentMessage = ({ text, label = "Codex · live" }: { text: string; lab
       </span>
       {label}
     </div>
-    <p className="whitespace-pre-wrap text-sm leading-6 text-slate-200">
-      {text}
-      <span className="ml-0.5 inline-block h-4 w-1 animate-pulse bg-emerald-400 align-middle" />
-    </p>
+    <MarkdownText text={text} live />
   </article>
 );
 
