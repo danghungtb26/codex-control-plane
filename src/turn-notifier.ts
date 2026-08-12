@@ -80,6 +80,9 @@ const toDashboardContext = (context: TurnRunContext): DashboardTaskContext => ({
   cwd: context.cwd,
 });
 
+const taskLabel = (context: Pick<TurnRunContext, "repo" | "kind" | "number" | "action" | "threadId">) =>
+  `${context.repo} ${context.kind} #${context.number} action=${context.action} thread=${context.threadId}`;
+
 export class TurnNotifier {
   private contexts = new Map<string, TurnContext>();
 
@@ -110,6 +113,8 @@ export class TurnNotifier {
     const commitBefore = await readGitHead(context.cwd);
     const dashboardContext = toDashboardContext(context);
 
+    console.log(`[task] start ${taskLabel(context)}`);
+
     try {
       await this.dashboard?.recordTaskStarted(dashboardContext, commitBefore);
     } catch (error) {
@@ -135,6 +140,8 @@ export class TurnNotifier {
       this.register(turn.turnId, { ...context, commitBefore });
       return turn;
     } catch (error) {
+      console.error(`[task] end status=failed ${taskLabel(context)} error=${(error as Error).message}`);
+
       try {
         await this.dashboard?.recordTaskFailed(dashboardContext, commitBefore, error as Error);
       } catch (dashboardError) {
@@ -194,6 +201,10 @@ export class TurnNotifier {
 
     const commitAfter = await readGitHead(context.cwd);
     const summary = summaryFrom(event.finalText, context, event.status);
+
+    console.log(
+      `[task] end status=${event.status} ${taskLabel(context)} turn=${event.turnId} commit=${context.commitBefore || "-"}->${commitAfter || "-"}`,
+    );
 
     try {
       await this.dashboard?.recordTurnCompleted({
