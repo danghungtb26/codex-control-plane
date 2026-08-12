@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { CodexAppServerClient, TurnCompletedEvent } from "./codex-client.js";
+import type { DashboardStore, DashboardTaskContext } from "./dashboard-store.js";
 import type { DiscordNotificationTarget, DiscordNotifier } from "./discord-notifier.js";
 import type { GithubBindingRegistry, GithubReportReceipt } from "./github-binding-registry.js";
 
@@ -63,6 +64,16 @@ const summaryFrom = (finalText: string, context: TurnContext, status: string) =>
   return `${context.action} ${status}${request ? `: ${request.slice(0, 400)}` : ""}`;
 };
 
+const toDashboardContext = (context: TurnRunContext): DashboardTaskContext => ({
+  repo: context.repo,
+  kind: context.kind,
+  number: context.number,
+  threadId: context.threadId,
+  action: context.action,
+  request: context.request,
+  cwd: context.cwd,
+});
+
 export class TurnNotifier {
   private contexts = new Map<string, TurnContext>();
 
@@ -70,6 +81,7 @@ export class TurnNotifier {
     codex: CodexAppServerClient,
     private readonly github: GithubBindingRegistry,
     private readonly discord: DiscordNotifier,
+    private readonly dashboard?: DashboardStore,
   ) {
     codex.on("turnCompleted", (event: TurnCompletedEvent) => {
       void this.handleCompleted(event);
@@ -90,6 +102,13 @@ export class TurnNotifier {
     run: () => Promise<T>,
   ): Promise<T> {
     const commitBefore = await readGitHead(context.cwd);
+    const dashboardContext = toDashboardContext(context);
+
+    try {
+      await this.dashboard?.recordTaskStarted(dashboardContext, commitBefore);
+    } catch (error) {
+      console.error("[dashboard] start event failed:", (error as Error).message);
+    }
 
     try {
       await this.discord.sendStarted({
@@ -110,6 +129,12 @@ export class TurnNotifier {
       this.register(turn.turnId, { ...context, commitBefore });
       return turn;
     } catch (error) {
+      try {
+        await this.dashboard?.recordTaskFailed(dashboardContext, commitBefore, error as Error);
+      } catch (dashboardError) {
+        console.error("[dashboard] failure event failed:", (dashboardError as Error).message);
+      }
+
       try {
         await this.discord.sendFailure({
           repo: context.repo,
@@ -163,6 +188,19 @@ export class TurnNotifier {
 
     const commitAfter = await readGitHead(context.cwd);
     const summary = summaryFrom(event.finalText, context, event.status);
+
+    try {
+      await this.dashboard?.recordTurnCompleted({
+        context: toDashboardContext(context),
+        turnId: event.turnId,
+        status: event.status,
+        summary,
+        commitBefore: context.commitBefore,
+        commitAfter,
+      });
+    } catch (error) {
+      console.error("[dashboard] completion event failed:", (error as Error).message);
+    }
 
     let receipt = await this.resolveCodexReceipt(context, event.finalText);
     if (!receipt && !isInterrupted(event.status)) {
