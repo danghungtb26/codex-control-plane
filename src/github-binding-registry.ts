@@ -72,6 +72,20 @@ export class GithubBindingRegistry {
     await run(this.ghBin, ["api", "-X", "POST", `repos/${binding.repo}/issues/${binding.number}/comments`, "-f", `body=${body}`]);
   }
 
+  async resolveReportReceipt(repo: string, commentId: string): Promise<GithubReportReceipt | null> {
+    if (!/^\d+$/.test(commentId)) return null;
+    try {
+      const raw = await run(this.ghBin, ["api", `repos/${repo}/issues/comments/${commentId}`]);
+      const comment = JSON.parse(raw) as IssueComment;
+      const resolvedId = String(comment.id ?? "");
+      const commentUrl = String(comment.html_url ?? "");
+      if (!resolvedId || !commentUrl) return null;
+      return { commentId: resolvedId, commentUrl, fallback: false };
+    } catch {
+      return null;
+    }
+  }
+
   async postFallbackReport(input: {
     repo: string;
     kind: BindingKind;
