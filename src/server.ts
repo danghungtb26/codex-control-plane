@@ -5,10 +5,12 @@ import { BindingStore } from "./binding-store.js";
 import { CodexAppServerClient } from "./codex-client.js";
 import { withGithubCompletionComment, withGithubIssueImplementation } from "./codex-prompt.js";
 import { loadConfig } from "./config.js";
+import { DiscordNotifier } from "./discord-notifier.js";
 import { ReviewDispatcher } from "./dispatcher.js";
 import { GithubBindingRegistry } from "./github-binding-registry.js";
 import { parseGithubEvent, verifyGithubSignature } from "./github-webhook.js";
 import { readBody, sendJson } from "./http-utils.js";
+import { TurnNotifier } from "./turn-notifier.js";
 
 const config = loadConfig();
 const store = new BindingStore();
@@ -17,9 +19,11 @@ await store.load();
 const githubBindings = new GithubBindingRegistry(config.ghBin);
 const resolver = new BindingResolver(store, githubBindings, config);
 const codex = new CodexAppServerClient(config.codexBin, config.codexAllowNetwork);
+const discord = new DiscordNotifier(config.discordWebhookUrl);
+const turnNotifier = new TurnNotifier(codex, discord);
 await codex.start();
 
-const dispatcher = new ReviewDispatcher(resolver, codex, config);
+const dispatcher = new ReviewDispatcher(resolver, codex, turnNotifier, config);
 const seenDeliveries = new Set<string>();
 const rememberDelivery = (id: string) => {
   if (!id) return false;
@@ -80,6 +84,11 @@ const adminServer = createServer(async (req, res) => {
   try {
     if (req.method === "GET" && req.url === "/bindings") {
       return sendJson(res, 200, store.list());
+    }
+
+    if (req.method === "POST" && req.url === "/notifications/test") {
+      await discord.sendTest();
+      return sendJson(res, 200, { ok: true, provider: "discord" });
     }
 
     if (req.method === "POST" && req.url === "/bindings") {
@@ -147,6 +156,12 @@ const adminServer = createServer(async (req, res) => {
           cwd,
           allowNetwork: config.codexAllowNetwork,
         });
+        turnNotifier.register(turn.turnId, {
+          repo,
+          kind: "issue",
+          number: issueNumber,
+          threadId,
+        });
         return sendJson(res, 201, { binding, turn });
       }
 
@@ -163,6 +178,12 @@ const adminServer = createServer(async (req, res) => {
       const turn = await codex.startTurn(threadId, prompt, {
         cwd,
         allowNetwork: config.codexAllowNetwork,
+      });
+      turnNotifier.register(turn.turnId, {
+        repo,
+        kind: "pr",
+        number: legacyPrNumber,
+        threadId,
       });
       return sendJson(res, 201, { binding, turn, legacyMode: true });
     }
@@ -188,6 +209,12 @@ const adminServer = createServer(async (req, res) => {
         cwd: binding.cwd,
         allowNetwork: config.codexAllowNetwork,
       });
+      turnNotifier.register(turn.turnId, {
+        repo,
+        kind: "pr",
+        number: prNumber,
+        threadId: binding.threadId,
+      });
       return sendJson(res, 202, { binding, turn });
     }
 
@@ -203,6 +230,7 @@ webhookServer.listen(config.webhookPort, "127.0.0.1", () => {
 });
 adminServer.listen(config.adminPort, "127.0.0.1", () => {
   console.log(`[bridge] local admin API: http://127.0.0.1:${config.adminPort}`);
+  console.log(`[bridge] Discord notifications: ${discord.enabled ? "enabled" : "disabled"}`);
 });
 
 const shutdown = () => {
