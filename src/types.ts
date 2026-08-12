@@ -1,12 +1,25 @@
 export type JsonObject = Record<string, unknown>;
 
+export type BindingKind = "issue" | "pr";
+
 export type Binding = {
   repo: string;
-  prNumber: number;
+  kind: BindingKind;
+  number: number;
   threadId: string;
   cwd: string;
+  sourceIssueNumber?: number;
   createdAt: string;
   updatedAt: string;
+};
+
+export type RemoteBindingMarker = {
+  version: 1;
+  repo: string;
+  kind: BindingKind;
+  number: number;
+  threadId: string;
+  sourceIssueNumber?: number;
 };
 
 export type DispatchMessage = {
