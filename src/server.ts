@@ -28,7 +28,7 @@ const codex = new CodexAppServerClient(
 );
 const discord = new DiscordNotifier(config.discordWebhookUrl);
 const turnNotifier = new TurnNotifier(codex, githubBindings, discord, dashboard);
-const dashboardHttp = new DashboardHttp(dashboard, store);
+const dashboardHttp = new DashboardHttp(dashboard, store, codex);
 codex.on("notification", (event: CodexNotificationEvent) => {
   dashboard.recordCodexNotification(event);
 });
