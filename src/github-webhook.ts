@@ -27,16 +27,17 @@ export const parseGithubEvent = (
   if (!repo || !sender || !isAllowed(config, repo, sender)) return null;
 
   if (event === "pull_request_review" && payload.action === "submitted") {
-    const prNumber = Number(payload.pull_request?.number);
+    const number = Number(payload.pull_request?.number);
     const state = clean(payload.review?.state).toLowerCase();
     const body = clean(payload.review?.body);
-    if (!Number.isInteger(prNumber)) return null;
+    if (!Number.isInteger(number)) return null;
     if (!["changes_requested", "commented"].includes(state)) return null;
     if (!body && state !== "changes_requested") return null;
 
     return {
       repo,
-      prNumber,
+      targetKind: "pr",
+      number,
       sender,
       kind: "review",
       url: clean(payload.review?.html_url),
@@ -53,15 +54,16 @@ export const parseGithubEvent = (
     payload.action === "created" &&
     config.forwardInlineReviewComments
   ) {
-    const prNumber = Number(payload.pull_request?.number);
+    const number = Number(payload.pull_request?.number);
     const body = clean(payload.comment?.body);
-    if (!Number.isInteger(prNumber) || !body) return null;
+    if (!Number.isInteger(number) || !body) return null;
 
     const path = clean(payload.comment?.path);
     const line = payload.comment?.line ?? payload.comment?.original_line ?? "?";
     return {
       repo,
-      prNumber,
+      targetKind: "pr",
+      number,
       sender,
       kind: "inline-review",
       url: clean(payload.comment?.html_url),
@@ -76,17 +78,17 @@ export const parseGithubEvent = (
   }
 
   if (event === "issue_comment" && payload.action === "created") {
-    if (!payload.issue?.pull_request) return null;
-    const prNumber = Number(payload.issue?.number);
+    const number = Number(payload.issue?.number);
     const body = clean(payload.comment?.body);
-    if (!Number.isInteger(prNumber) || !body) return null;
+    if (!Number.isInteger(number) || !body) return null;
 
     const match = body.match(/^\/codex(?:-fix)?\s+([\s\S]+)$/i);
     if (!match) return null;
 
     return {
       repo,
-      prNumber,
+      targetKind: payload.issue?.pull_request ? "pr" : "issue",
+      number,
       sender,
       kind: "command",
       url: clean(payload.comment?.html_url),
