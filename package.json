@@ -4,10 +4,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "bun scripts/dev.ts",
+    "dev": "bun --watch src/server.ts",
     "start": "bun src/server.ts",
     "typecheck": "tsc --noEmit && tsc -p dashboard/tsconfig.json --noEmit",
-    "dashboard:dev": "vite build --config dashboard/vite.config.ts --watch",
+    "dashboard:dev": "vite --config dashboard/vite.config.ts",
     "dashboard:build": "vite build --config dashboard/vite.config.ts",
     "build": "bun run typecheck && bun run dashboard:build"
   },
