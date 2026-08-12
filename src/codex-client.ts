@@ -85,7 +85,7 @@ export class CodexAppServerClient extends EventEmitter {
     const result = await this.request("thread/start", {
       cwd,
       approvalPolicy: "never",
-      sandbox: "workspaceWrite",
+      sandbox: "workspace-write",
       serviceName: "codex_control_plane",
     });
 
@@ -98,7 +98,7 @@ export class CodexAppServerClient extends EventEmitter {
     const result = await this.request("thread/resume", {
       threadId,
       approvalPolicy: "never",
-      sandbox: "workspaceWrite",
+      sandbox: "workspace-write",
     });
     this.loadedThreads.add(threadId);
     return result.thread;
@@ -150,6 +150,7 @@ export class CodexAppServerClient extends EventEmitter {
         console.log(`[codex] steering ${threadId} / ${activeTurnId}`);
         return await this.steer(threadId, message);
       } catch (error) {
+        // Race: the turn may have completed between our local check and turn/steer.
         console.warn("[codex] steer failed; retrying as a new turn:", (error as Error).message);
         this.activeTurns.delete(threadId);
       }
@@ -189,6 +190,7 @@ export class CodexAppServerClient extends EventEmitter {
     const id = typeof message.id === "number" ? message.id : undefined;
     const method = typeof message.method === "string" ? message.method : undefined;
 
+    // Response to a request initiated by us.
     if (id !== undefined && !method) {
       const pending = this.pending.get(id);
       if (!pending) return;
@@ -202,6 +204,7 @@ export class CodexAppServerClient extends EventEmitter {
       return;
     }
 
+    // Server-initiated request (approvals / input). POC policy: never elevate.
     if (id !== undefined && method) {
       if (
         method === "item/commandExecution/requestApproval" ||
