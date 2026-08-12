@@ -4,16 +4,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/server.ts",
-    "start": "tsx src/server.ts",
+    "dev": "bun --watch src/server.ts",
+    "start": "bun src/server.ts",
     "typecheck": "tsc --noEmit"
   },
-  "engines": {
-    "node": ">=20"
-  },
   "devDependencies": {
-    "@types/node": "^22.0.0",
-    "tsx": "^4.20.0",
+    "@types/bun": "latest",
     "typescript": "^5.9.0"
   }
 }
