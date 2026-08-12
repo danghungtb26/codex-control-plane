@@ -54,12 +54,12 @@ Valid only on a PR conversation/review/inline review comment.
 /codex:fix-comment Fix this review finding and run the relevant tests.
 ```
 
-A normal review or inline comment without this prefix is ignored.
+A normal review or inline comment without this prefix is ignored. If the command is standalone and contains no finding text, Codex inspects the PR's current review comments/threads and fixes the actionable feedback authorized by that command.
 
 Behavior:
 
 1. resolve the PR back to its original implementation thread;
-2. inspect the referenced feedback/thread;
+2. inspect the referenced/current review feedback;
 3. apply only the relevant fix;
 4. run relevant tests/checks;
 5. if files changed, create a real commit;
@@ -252,7 +252,7 @@ GitHub report comment: 123456789
 Report: https://github.com/...
 ```
 
-Commit IDs are captured from `git rev-parse HEAD` before and after the tracked turn. If the action does not create a commit, Discord shows the commit as unchanged. Summary prefers the `CODEX_TASK_SUMMARY` returned by Codex and falls back to its final response/task context.
+The control plane snapshots `git rev-parse HEAD` **before starting the Codex turn** and reads it again after completion, so Discord can show the actual commit transition. If the action does not create a commit, it shows the commit as unchanged. Summary prefers the `CODEX_TASK_SUMMARY` returned by Codex and falls back to its final response/task context.
 
 Test Discord:
 
