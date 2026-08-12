@@ -75,6 +75,8 @@ The main transcript follows the newest activity automatically. If you scroll up 
 
 Running tasks, tools and live Codex messages have lightweight activity indicators. Codex collaboration items are rendered as subagent cards instead of generic tools. Opening a subagent card splits the conversation view and loads the child Codex thread in a right-hand panel with its own message/tool/file activity and realtime SSE updates. When available, `thread/read` metadata supplies the child agent nickname, role, parent thread and status.
 
+Codex agent messages are rendered as CommonMark with `react-markdown`, including headings, lists, links, blockquotes, inline code and fenced code blocks. The same renderer is used for completed messages, live streaming text and subagent conversations. Raw HTML inside markdown is deliberately ignored, while tool/command output stays plain preformatted text.
+
 The split panel is backed by:
 
 ```text
