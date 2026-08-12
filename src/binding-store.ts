@@ -64,6 +64,14 @@ export class BindingStore {
     return this.get(repo, "pr", prNumber);
   }
 
+  getWorkspace(repo: string) {
+    const normalizedRepo = repo.toLowerCase();
+    const binding = [...this.bindings.values()]
+      .filter((item) => item.repo.toLowerCase() === normalizedRepo)
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+    return binding?.cwd ?? null;
+  }
+
   list() {
     return [...this.bindings.values()];
   }
