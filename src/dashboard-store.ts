@@ -21,6 +21,7 @@ export type DashboardEvent = {
     | "task.failed"
     | "turn.started"
     | "turn.completed"
+    | "user.message"
     | "agent.delta"
     | "agent.message"
     | "tool.started"
@@ -83,6 +84,63 @@ const commandText = (item: Record<string, any>) => {
   return asString(item.command) || asString(item.commandLine) || asString(item.name) || item.type;
 };
 
+const timeFromCodex = (value: unknown, fallback: string) => {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  const milliseconds = value > 10_000_000_000 ? value : value * 1000;
+  const date = new Date(milliseconds);
+  return Number.isNaN(date.getTime()) ? fallback : date.toISOString();
+};
+
+const offsetTime = (timestamp: string, offsetMs: number) => {
+  const value = new Date(timestamp).getTime();
+  return new Date((Number.isNaN(value) ? 0 : value) + offsetMs).toISOString();
+};
+
+const userMessageText = (item: Record<string, any>) => {
+  const content = Array.isArray(item.content) ? item.content : [];
+  return content
+    .map((part: Record<string, any>) => {
+      if (part?.type === "text") return asString(part.text);
+      if (part?.type === "image") return "[image input]";
+      if (part?.type === "localImage") return `[local image${part.path ? `: ${part.path}` : ""}]`;
+      return "";
+    })
+    .filter(Boolean)
+    .join("\n");
+};
+
+const cleanAgentText = (text: string) =>
+  text
+    .split("\n")
+    .filter(
+      (line) =>
+        !line.startsWith("GITHUB_REPORT_COMMENT_ID=") &&
+        !line.startsWith("GITHUB_REPORT_COMMENT_URL=") &&
+        !line.startsWith("CODEX_TASK_SUMMARY="),
+    )
+    .join("\n")
+    .trim();
+
+const historyToolDetail = (item: Record<string, any>) => {
+  if (item.type === "commandExecution") {
+    return [
+      item.cwd ? `cwd: ${item.cwd}` : "",
+      item.status ? `status: ${item.status}` : "",
+      Number.isInteger(item.exitCode) ? `exit code: ${item.exitCode}` : "",
+      typeof item.durationMs === "number" ? `duration: ${item.durationMs} ms` : "",
+      asString(item.aggregatedOutput),
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  if (item.type === "fileChange") {
+    return compactJson({ status: item.status, changes: item.changes });
+  }
+
+  return compactJson(item);
+};
+
 export class DashboardStore {
   private events: DashboardEvent[] = [];
   private subscribers = new Set<Subscriber>();
@@ -122,6 +180,98 @@ export class DashboardStore {
 
   getEvents(threadId: string) {
     return this.events.filter((event) => event.threadId === threadId);
+  }
+
+  mergeThreadHistory(threadId: string, thread: Record<string, any> | null) {
+    const persisted = this.getEvents(threadId);
+    if (!thread || !Array.isArray(thread.turns)) return persisted;
+
+    const persistedItemIds = new Set(
+      persisted.map((event) => event.itemId).filter((itemId): itemId is string => Boolean(itemId)),
+    );
+    const trackedTurnIds = new Set(
+      persisted
+        .filter((event) => event.type === "turn.started")
+        .map((event) => event.turnId)
+        .filter((turnId): turnId is string => Boolean(turnId)),
+    );
+    const persistedTurnStart = new Map(
+      persisted
+        .filter((event) => event.type === "turn.started" && event.turnId)
+        .map((event) => [event.turnId as string, event.timestamp]),
+    );
+
+    const history: DashboardEvent[] = [];
+    thread.turns.forEach((rawTurn: unknown, turnIndex: number) => {
+      const turn = (rawTurn ?? {}) as Record<string, any>;
+      const turnId = asString(turn.id) || `history-turn-${turnIndex}`;
+      const fallbackStart = new Date(turnIndex * 1000).toISOString();
+      const startedAt = persistedTurnStart.get(turnId) ?? timeFromCodex(turn.startedAt, fallbackStart);
+      const items = Array.isArray(turn.items) ? turn.items : [];
+
+      items.forEach((rawItem: unknown, itemIndex: number) => {
+        const item = (rawItem ?? {}) as Record<string, any>;
+        const itemId = asString(item.id) || `${turnId}-item-${itemIndex}`;
+        if (persistedItemIds.has(itemId) || item.type === "reasoning") return;
+        const timestamp = offsetTime(startedAt, itemIndex + 1);
+        const base = {
+          id: `history:${turnId}:${itemId}`,
+          timestamp,
+          threadId,
+          turnId,
+          itemId,
+        };
+
+        if (item.type === "userMessage") {
+          if (trackedTurnIds.has(turnId)) return;
+          const text = userMessageText(item);
+          if (text) history.push({ ...base, type: "user.message", text });
+          return;
+        }
+
+        if (item.type === "agentMessage" || item.type === "plan") {
+          const text = cleanAgentText(asString(item.text));
+          if (text) {
+            history.push({
+              ...base,
+              type: "agent.message",
+              text,
+              toolName: item.type === "plan" ? "Codex plan" : undefined,
+            });
+          }
+          return;
+        }
+
+        history.push({
+          ...base,
+          type: "tool.completed",
+          status: asString(item.status) || undefined,
+          toolName: item.type === "commandExecution" ? commandText(item) : item.type || "Codex tool",
+          detail: historyToolDetail(item),
+        });
+      });
+
+      if (!persisted.some((event) => event.type === "turn.completed" && event.turnId === turnId)) {
+        const status = asString(turn.status);
+        if (status && status !== "inProgress") {
+          history.push({
+            id: `history:${turnId}:completed`,
+            timestamp: timeFromCodex(turn.completedAt, offsetTime(startedAt, items.length + 2)),
+            type: "turn.completed",
+            threadId,
+            turnId,
+            status,
+            summary: asString(turn.error?.message) || undefined,
+          });
+        }
+      }
+    });
+
+    return [...history, ...persisted].sort((a, b) => {
+      const byTime = a.timestamp.localeCompare(b.timestamp);
+      if (byTime !== 0) return byTime;
+      return a.id.localeCompare(b.id);
+    });
   }
 
   listTasks(bindings: Binding[]): DashboardTask[] {
@@ -304,7 +454,7 @@ export class DashboardStore {
           threadId,
           turnId: turnId || undefined,
           itemId: asString(item.id) || undefined,
-          text: item.text,
+          text: cleanAgentText(item.text),
         });
         return;
       }
@@ -343,7 +493,7 @@ export class DashboardStore {
 
     if (persist) {
       this.events.push(event);
-      this.writeChain = this.writeChain.then(async () => {
+      this.writeChain = this.writeChain.catch(() => undefined).then(async () => {
         await mkdir(path.dirname(this.filePath), { recursive: true });
         await appendFile(this.filePath, `${JSON.stringify(event)}\n`, "utf8");
       });
