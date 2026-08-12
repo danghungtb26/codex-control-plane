@@ -1,111 +1,51 @@
-# Codex Control Plane (local POC)
+# Codex Control Plane
 
-A Bun-native local control plane that keeps one durable Codex conversation from GitHub Issue implementation through PR review/fix turns.
-
-```text
-Issue /codex:implement
-  -> create/resume Issue thread
-  -> implement + test
-  -> commit + push
-  -> create/update PR with Closes #issue
-  -> PR inherits same thread
-
-PR comments/reviews
-  -> ignored by default
-  -> only explicit /codex:* commands execute
-
-PR /codex:fix-comment
-  -> resume implementation thread
-  -> fix requested feedback + test
-  -> commit + push existing PR branch
-
-Issue/PR /codex:summary
-  -> reporting only, no code changes
-```
+A Bun-native local control plane that keeps one durable Codex conversation from GitHub Issue implementation through PR review/fix turns, with a realtime React dashboard and Discord lifecycle notifications.
 
 ## Command protocol
 
-Normal GitHub Issue/PR/review comments do **not** trigger Codex work. A trusted sender must use one of these exact prefixes:
-
-### `/codex:implement`
-
-Valid on a GitHub Issue.
+Normal GitHub Issue/PR/review comments do **not** trigger Codex work. Trusted senders must use an explicit command prefix.
 
 ```text
-/codex:implement Start working on this issue. Implement the requirements and acceptance criteria, run focused tests and the broader suite, and report important notes.
+/codex:implement     Issue only: implement, test, commit, push, create/update PR
+/codex:fix-comment   PR only: fix authorized review feedback, test, commit, push
+/codex:summary       Issue/PR: read-only status/report
+/codex:create-pr     Issue: retry/recover PR creation for the existing thread
 ```
 
-Behavior:
+Core rules:
 
-1. create a durable Issue thread on first use, or resume it on later use;
-2. inspect the Issue and working tree;
-3. create/use the Issue branch;
-4. implement and test;
-5. create a real commit for task-related changes;
-6. push the branch;
-7. create/update exactly one PR whose body contains `Closes #<issue>`;
-8. post the completion report on the PR.
-
-### `/codex:fix-comment`
-
-Valid only on a PR conversation/review/inline review comment.
-
-```text
-/codex:fix-comment Fix this review finding and run the relevant tests.
-```
-
-A normal review or inline comment without this prefix is ignored. If the command is standalone and contains no finding text, Codex inspects the PR's current review comments/threads and fixes the actionable feedback authorized by that command.
-
-Behavior:
-
-1. resolve the PR back to its original implementation thread;
-2. inspect the referenced/current review feedback;
-3. apply only the relevant fix;
-4. run relevant tests/checks;
-5. if files changed, create a real commit;
-6. push the existing PR branch;
-7. post the completion report on the PR.
-
-No empty commit is created when no code change is needed.
-
-### `/codex:summary`
-
-Valid on an Issue or PR.
-
-```text
-/codex:summary Summarize current status, commits, tests, blockers, and remaining work.
-```
-
-This is reporting-only: Codex must not modify implementation files, create commits, push, create a PR, or merge.
-
-### `/codex:create-pr`
-
-Valid on an Issue with an existing durable thread.
-
-```text
-/codex:create-pr Create or recover the PR for the implementation already completed in this Issue thread.
-```
-
-`/codex:implement` already creates the PR automatically. `create-pr` exists as a recovery/retry action when implementation is done but push/PR creation previously failed or the PR needs to be recreated/updated.
-
-## Core rules
-
-- New Issue implementation work starts a new durable Codex thread.
-- PR fix/review work must resume the original implementation thread; the control plane refuses to silently invent a new fix conversation.
+- A new Issue implementation gets a durable Codex thread.
+- PR fixes resume the original implementation thread rather than creating a new conversation.
 - GitHub hidden comments are the durable thread registry; `.data/bindings.json` is the local cache.
-- GitHub review events are command-gated; review submissions and inline comments without a supported `/codex:*` prefix are ignored.
 - Codex owns the normal GitHub completion report; the control plane only posts a fallback when no valid receipt is returned.
-- Bun is the only JavaScript runtime/package manager used by this project.
+- `CODEX_AUTO_APPROVE=true` means `danger-full-access` with no approval prompts.
 
-## Prerequisites
+## Single HTTP origin
 
-```bash
-bun --version
-codex --version
-gh auth status
+Everything is served from one port:
+
+```text
+http://127.0.0.1:8788/
+├── /                         React dashboard
+├── /api/tasks                task list
+├── /api/tasks/:thread/events transcript/history
+├── /api/events               realtime SSE
+├── /github/webhook           GitHub webhook
+├── /tasks                    manual task API
+├── /send                     send to existing thread
+├── /interrupt                interrupt active turn
+├── /bindings                 binding API
+└── /notifications/test       Discord test
 ```
 
-A local checkout/worktree is required for each managed repository.
+The canonical env is:
+
+```env
+PORT=8788
+```
+
+For migration compatibility only, when `PORT` is missing the server falls back to `ADMIN_PORT`, then `WEBHOOK_PORT`. Runtime still listens on exactly one port.
 
 ## Install
 
@@ -114,16 +54,14 @@ bun install
 cp .env.example .env
 ```
 
-Bun automatically loads `.env`.
-
 Minimal `.env`:
 
 ```env
 GITHUB_WEBHOOK_SECRET=...
 GITHUB_ALLOWED_REPOS=my-org/my-repo
 GITHUB_ALLOWED_SENDERS=my-login
-WEBHOOK_PORT=8787
-ADMIN_PORT=8788
+PORT=8788
+
 CODEX_BIN=codex
 CODEX_AUTO_APPROVE=true
 CODEX_ALLOW_NETWORK=false
@@ -133,40 +71,87 @@ REVIEW_DEBOUNCE_MS=1200
 DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...
 ```
 
-`GH_BIN` and `REPO_WORKSPACES` remain optional advanced/recovery overrides.
-
-## Codex access mode
-
-`CODEX_AUTO_APPROVE=true` means full access:
-
-```text
-approvalPolicy = never
-thread sandbox = danger-full-access
-turn sandboxPolicy = dangerFullAccess
-```
-
-In this mode Codex can mutate `.git`, create/switch branches, commit, push, execute commands, write outside the workspace, and access the network without approval prompts. `CODEX_ALLOW_NETWORK` is ignored.
-
-Set `CODEX_AUTO_APPROVE=false` to use `workspace-write` with deny-all approvals. In that restricted mode, `CODEX_ALLOW_NETWORK` controls network access.
-
-Keep `GITHUB_ALLOWED_REPOS` and `GITHUB_ALLOWED_SENDERS` narrow when full access is enabled.
+`GH_BIN` and `REPO_WORKSPACES` remain optional recovery/advanced overrides.
 
 ## Run
 
+Production-style local run:
+
 ```bash
 bun run typecheck
+bun run dashboard:build
 bun run start
 ```
 
-Development:
+Open only:
+
+```text
+http://127.0.0.1:8788/
+```
+
+Development is also single-port:
 
 ```bash
 bun run dev
 ```
 
-## Local admin API
+`bun run dev` runs the control plane watcher plus Vite `build --watch`. There is no separate Vite HTTP port; dashboard assets rebuild into `dashboard/dist`, and the control plane continues serving them from `PORT`. Refresh the browser after frontend edits.
 
-### Start a task manually
+## Dashboard
+
+The Vite + React + Tailwind dashboard is read-only in V1 and groups work by durable `threadId`.
+
+It shows:
+
+- Issue → PR mapping
+- action and task status
+- commit before → after
+- task summary
+- user messages
+- Codex agent messages
+- command/tool and file activity
+- realtime Codex agent text over SSE
+- persisted thread history loaded through Codex App Server
+
+Codex `reasoning` items are intentionally excluded from dashboard persistence and rendering.
+
+Dashboard lifecycle/new-turn events are appended to:
+
+```text
+.data/task-events.jsonl
+```
+
+## Cloudflare Tunnel: one hostname, one service
+
+Publish a single hostname to the single local origin:
+
+```text
+codex.example.com -> http://127.0.0.1:8788
+```
+
+The GitHub webhook becomes:
+
+```text
+https://codex.example.com/github/webhook
+```
+
+No second tunnel or port is required.
+
+## Fast auth with Cloudflare Access
+
+Recommended setup:
+
+1. Create a Cloudflare Access self-hosted application for `codex.example.com/*`.
+2. Add an Allow policy for only trusted users. For a personal setup, Cloudflare account membership is the simplest option; email one-time PIN is also easy for a small allowlist.
+3. Create a **more-specific** Access application for `codex.example.com/github/webhook` with a **Bypass** policy so GitHub can post webhooks without an interactive login.
+4. Keep `GITHUB_WEBHOOK_SECRET` configured. `/github/webhook` always verifies GitHub's `X-Hub-Signature-256` HMAC before accepting the payload.
+5. Do not bypass `/`, `/api/*`, `/send`, `/interrupt`, `/tasks`, `/bindings`, or `/notifications/test`.
+
+This keeps the UI and all control/admin APIs behind gateway authentication while exposing only the signed GitHub webhook path to machine traffic.
+
+## Manual APIs
+
+Start an Issue task:
 
 ```bash
 curl -sS http://127.0.0.1:8788/tasks \
@@ -174,14 +159,12 @@ curl -sS http://127.0.0.1:8788/tasks \
   -d '{
     "repo": "my-org/my-repo",
     "issueNumber": 245,
-    "cwd": "/absolute/path/to/my-repo",
+    "cwd": "/absolute/path/to/repo",
     "message": "Implement this Issue, run tests, commit, push and create the PR."
   }' | jq
 ```
 
-### Send to an existing Issue/PR thread
-
-Supply exactly one of `issueNumber` or `prNumber`.
+Send to an existing Issue thread:
 
 ```bash
 curl -sS http://127.0.0.1:8788/send \
@@ -193,11 +176,7 @@ curl -sS http://127.0.0.1:8788/send \
   }' | jq
 ```
 
-`/send` is a trusted local manual escape hatch and is reported to Discord as action `manual`; GitHub webhook work remains command-gated by `/codex:*`.
-
-### Interrupt an active turn
-
-By Issue:
+Interrupt an active turn:
 
 ```bash
 curl -sS http://127.0.0.1:8788/interrupt \
@@ -205,111 +184,27 @@ curl -sS http://127.0.0.1:8788/interrupt \
   -d '{"repo":"my-org/my-repo","issueNumber":245}' | jq
 ```
 
-By PR:
-
-```bash
-curl -sS http://127.0.0.1:8788/interrupt \
-  -H 'content-type: application/json' \
-  -d '{"repo":"my-org/my-repo","prNumber":269}' | jq
-```
-
-By exact thread:
-
-```bash
-curl -sS http://127.0.0.1:8788/interrupt \
-  -H 'content-type: application/json' \
-  -d '{"threadId":"019..."}' | jq
-```
-
-Interrupting stops only the active turn. The durable thread/binding remains and can be resumed later. Interrupted/cancelled turns do not create a fallback GitHub completion report.
-
-## GitHub completion report contract
-
-Codex final replies use:
-
-```text
-GITHUB_REPORT_COMMENT_ID=123456789
-GITHUB_REPORT_COMMENT_URL=https://github.com/my-org/my-repo/pull/269#issuecomment-123456789
-CODEX_TASK_SUMMARY=Fixed the requested validation path, added focused coverage, committed and pushed the PR branch.
-```
-
-The control plane validates the GitHub comment receipt. If a non-interrupted turn returns no valid receipt, it posts a fallback report.
+Interrupting stops only the active turn. The durable thread/binding remains resumable.
 
 ## Discord notifications
 
-When `DISCORD_WEBHOOK_URL` is configured, every tracked Codex turn from GitHub commands, `/tasks`, or `/send` has lifecycle notifications.
-
-At task start:
+When `DISCORD_WEBHOOK_URL` is configured, tracked work emits:
 
 ```text
-🚀 Codex task started
-my-org/my-repo · PR #269
-Action: fix-comment
-Task: Fix this review finding and run the relevant tests.
-Commit before: abc123def456
-Thread: 019...
+🚀 started
+✅ completed
+❌ failed
+⚠️ interrupted/cancelled
 ```
 
-On normal completion or terminal failure/interruption:
+Notifications include target Issue/PR, action, task request, thread/turn IDs, commit transition, summary and GitHub completion-report link when available.
 
-```text
-✅ Codex completed
-my-org/my-repo · PR #269
-Action: fix-comment
-Task: Fix this review finding and run the relevant tests.
-Commit: abc123def456 → 789abc012def
-Summary: Fixed the validation path, added coverage, committed and pushed the PR branch.
-Thread: 019...
-Turn: 019...
-GitHub report comment: 123456789
-Report: https://github.com/...
-```
-
-A Codex turn ending with status `failed` uses the same terminal notification with a ❌ status. If `turn/start`, `turn/steer`, or the initial send throws before a tracked turn can reach terminal completion, the control plane sends a separate failure notification:
-
-```text
-❌ Codex task failed before completion
-my-org/my-repo · PR #269
-Action: fix-comment
-Task: Fix this review finding.
-Error: <actual error>
-Commit: abc123def456
-Thread: 019...
-```
-
-The control plane snapshots `git rev-parse HEAD` before starting the Codex turn and reads it again after completion, so Discord shows the actual commit transition. If the action does not create a commit, it shows the commit as unchanged. Summary prefers the `CODEX_TASK_SUMMARY` returned by Codex and falls back to its final response/task context.
-
-Discord notification errors are logged but do not cause the Codex task itself to fail.
-
-Test Discord connectivity:
-
-```bash
-curl -X POST http://127.0.0.1:8788/notifications/test
-```
-
-## GitHub webhook
-
-Expose only port `8787`:
-
-```bash
-cloudflared tunnel --url http://localhost:8787
-```
-
-Subscribe to:
-
-- Issue comments
-- Pull request reviews
-- Pull request review comments
-
-Only supported `/codex:*` commands from allowlisted senders/repositories enter the dispatcher.
-
-## Security notes
+## Security
 
 - Always validate `GITHUB_WEBHOOK_SECRET`.
-- Keep repository and sender allowlists narrow.
-- Never expose admin port `8788`.
+- Keep `GITHUB_ALLOWED_REPOS` and `GITHUB_ALLOWED_SENDERS` narrow.
+- Keep the origin bound to `127.0.0.1`; publish it through Cloudflare Tunnel rather than exposing the local port directly.
+- Put dashboard/admin paths behind Cloudflare Access when publishing the hostname.
+- Scope the Access bypass to `/github/webhook` only.
 - Treat `DISCORD_WEBHOOK_URL` as a secret.
-- `CODEX_AUTO_APPROVE=true` grants Codex unsandboxed local command/filesystem/network access.
-- GitHub binding markers never store local absolute paths.
-- Only binding markers authored by the authenticated `gh` user are trusted.
-- Normal PR comments/reviews never trigger fixes without an explicit supported command prefix.
+- `CODEX_AUTO_APPROVE=true` grants Codex unsandboxed local filesystem/command/network access.
