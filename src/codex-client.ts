@@ -121,6 +121,14 @@ export class CodexAppServerClient extends EventEmitter {
     return result.thread;
   }
 
+  async readThread(threadId: string, includeTurns = true) {
+    const result = await this.request("thread/read", {
+      threadId,
+      includeTurns,
+    });
+    return result.thread as Record<string, any>;
+  }
+
   async startTurn(threadId: string, message: string, options: StartTurnOptions = {}) {
     await this.ensureThreadLoaded(threadId);
 
