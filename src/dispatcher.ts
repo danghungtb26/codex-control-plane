@@ -2,6 +2,7 @@ import type { BindingResolver } from "./binding-resolver.js";
 import type { CodexAppServerClient } from "./codex-client.js";
 import { withGithubCompletionComment } from "./codex-prompt.js";
 import type { Config } from "./config.js";
+import type { TurnNotifier } from "./turn-notifier.js";
 import type { DispatchMessage } from "./types.js";
 
 type PendingBatch = {
@@ -15,6 +16,7 @@ export class ReviewDispatcher {
   constructor(
     private readonly resolver: BindingResolver,
     private readonly codex: CodexAppServerClient,
+    private readonly notifier: TurnNotifier,
     private readonly config: Config,
   ) {}
 
@@ -80,9 +82,16 @@ export class ReviewDispatcher {
     });
 
     console.log(`[dispatcher] forwarding ${messages.length} event(s) to ${binding.threadId}`);
-    await this.codex.send(binding.threadId, prompt, {
+    const turn = await this.codex.send(binding.threadId, prompt, {
       cwd: binding.cwd,
       allowNetwork: this.config.codexAllowNetwork,
     });
+    this.notifier.register(turn.turnId, {
+      repo: first.repo,
+      kind: "pr",
+      number: first.prNumber,
+      threadId: binding.threadId,
+    });
+    return turn;
   }
 }
