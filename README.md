@@ -1,6 +1,6 @@
 # Codex Control Plane (local POC)
 
-A local control plane that keeps one durable Codex conversation across implementation and later PR review/fix turns.
+A Bun-native local control plane that keeps one durable Codex conversation across implementation and later PR review/fix turns.
 
 ```text
 new Issue/task
@@ -22,15 +22,24 @@ new Issue/task
 - **Existing PR fix/review** must resume the original thread; the control plane refuses to silently create a new fix conversation.
 - GitHub hidden comments are the durable thread registry; `.data/bindings.json` is the local cache.
 - **Codex owns the normal completion report.** The control plane only posts a fallback when Codex returns no valid GitHub report receipt.
+- **Bun is the only JavaScript runtime/package manager used by this project.** TypeScript runs directly in Bun; `tsx` and a separate Node.js runtime are not required.
 
 ## Prerequisites
 
+Install and authenticate:
+
+- Bun
+- Codex CLI
+- GitHub CLI (`gh`)
+- a local checkout/worktree for each managed repository
+
+Check:
+
 ```bash
+bun --version
 codex --version
 gh auth status
 ```
-
-You need Codex CLI, authenticated GitHub CLI, Node.js 20+ or Bun, and a local checkout/worktree.
 
 ## Install
 
@@ -38,6 +47,10 @@ You need Codex CLI, authenticated GitHub CLI, Node.js 20+ or Bun, and a local ch
 bun install
 cp .env.example .env
 ```
+
+`bun install` creates/updates the Bun lockfile for the checkout. Use Bun for dependency changes as well (`bun add`, `bun remove`, `bun update`).
+
+Bun automatically loads `.env`, so the project does not use a custom dotenv loader.
 
 Generate the GitHub webhook secret:
 
@@ -66,10 +79,34 @@ DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...
 
 `CODEX_ALLOW_NETWORK=true` is required when Codex itself must push, create/update PRs, or post its GitHub completion report. The control plane's binding registry and fallback reporter use local authenticated `gh api` independently.
 
-Start:
+## Run
+
+Development with Bun watch mode:
+
+```bash
+bun run dev
+```
+
+Normal start:
 
 ```bash
 bun run start
+```
+
+Typecheck:
+
+```bash
+bun run typecheck
+```
+
+The scripts are Bun-native:
+
+```json
+{
+  "dev": "bun --watch src/server.ts",
+  "start": "bun src/server.ts",
+  "typecheck": "tsc --noEmit"
+}
 ```
 
 ## Start a new implementation task
