@@ -30,6 +30,7 @@ http://127.0.0.1:8787/
 ├── /                         React dashboard
 ├── /api/tasks                task list
 ├── /api/tasks/:thread/events transcript/history
+├── /api/threads/:thread      subagent thread detail
 ├── /api/events               realtime SSE
 ├── /github/webhook           GitHub webhook
 ├── /tasks                    manual task API
@@ -117,7 +118,7 @@ Vite proxies `/api/*` to `http://127.0.0.1:8787`, including the SSE endpoint. Pr
 
 ## Dashboard
 
-The Vite + React + Tailwind dashboard is read-only in V1 and groups work by durable `threadId`.
+The Vite + React + Tailwind dashboard is read-only in V1 and groups work by durable root `threadId`.
 
 It shows:
 
@@ -130,6 +131,11 @@ It shows:
 - command/tool and file activity
 - realtime Codex agent text over SSE
 - persisted thread history loaded through Codex App Server
+- Codex collaboration/subagent activity with a split child-thread inspector
+
+The main conversation follows the newest activity automatically. Scrolling up pauses tail-following and shows a `↓ Latest` control rather than forcing the viewport back down while realtime events arrive.
+
+When Codex delegates work, collaboration items render as subagent cards with running/completed state. Clicking a card opens a right-side split panel (full overlay on narrow screens) and loads that child thread directly through Codex App Server `thread/read(includeTurns: true)`. The child transcript continues receiving realtime message/tool activity over the same SSE connection and shows nickname/role metadata when Codex provides it.
 
 Codex `reasoning` items are intentionally excluded from dashboard persistence and rendering.
 
@@ -138,6 +144,8 @@ Dashboard lifecycle/new-turn events are appended to:
 ```text
 .data/task-events.jsonl
 ```
+
+Agent-message deltas are streamed to the dashboard but are no longer printed to backend stdout. Backend logs stay focused on task lifecycle plus operational warnings/errors.
 
 ## Cloudflare Tunnel
 
