@@ -32,6 +32,7 @@ export type DashboardEvent = {
   repo?: string;
   kind?: BindingKind;
   number?: number;
+  prNumber?: number;
   action?: CodexAction;
   request?: string;
   status?: string;
@@ -164,6 +165,9 @@ export class DashboardStore {
       const latestCompletion = [...threadEvents]
         .reverse()
         .find((event) => event.type === "turn.completed");
+      const eventPrNumbers = threadEvents
+        .map((event) => event.prNumber)
+        .filter((number): number is number => Number.isInteger(number));
 
       tasks.push({
         threadId,
@@ -171,7 +175,9 @@ export class DashboardStore {
         issueNumber:
           issueBinding?.number ??
           prBindings.find((binding) => Number.isInteger(binding.sourceIssueNumber))?.sourceIssueNumber,
-        prNumbers: [...new Set(prBindings.map((binding) => binding.number))].sort((a, b) => a - b),
+        prNumbers: [...new Set([...prBindings.map((binding) => binding.number), ...eventPrNumbers])].sort(
+          (a, b) => a - b,
+        ),
         status,
         action: latestStart?.action,
         request: latestStart?.request,
@@ -221,6 +227,7 @@ export class DashboardStore {
     summary: string;
     commitBefore: string;
     commitAfter: string;
+    prNumber?: number;
   }) {
     return this.publish({
       type: "turn.completed",
@@ -229,6 +236,7 @@ export class DashboardStore {
       repo: input.context.repo,
       kind: input.context.kind,
       number: input.context.number,
+      prNumber: input.prNumber,
       action: input.context.action,
       request: input.context.request,
       status: input.status,
@@ -275,7 +283,7 @@ export class DashboardStore {
 
     if (method === "item/started") {
       const item = (params.item ?? {}) as Record<string, any>;
-      if (item.type === "agentMessage") return;
+      if (item.type === "agentMessage" || item.type === "reasoning") return;
       void this.publish({
         type: "tool.started",
         threadId,
@@ -289,6 +297,7 @@ export class DashboardStore {
 
     if (method === "item/completed") {
       const item = (params.item ?? {}) as Record<string, any>;
+      if (item.type === "reasoning") return;
       if (item.type === "agentMessage" && typeof item.text === "string") {
         void this.publish({
           type: "agent.message",
