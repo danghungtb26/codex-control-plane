@@ -26,8 +26,8 @@ BindingResolver
         ▼
 resume the SAME Codex thread
         │
-        ▼
-fix + tests + completion comment on PR
+        ├── fix + tests + completion comment on PR
+        └── Discord notification on turn completion (optional)
 ```
 
 ## Core rule
@@ -63,25 +63,101 @@ Generate a webhook secret:
 openssl rand -hex 32
 ```
 
-Example config:
+Minimal example config:
 
 ```env
 GITHUB_WEBHOOK_SECRET=...
 GITHUB_ALLOWED_REPOS=my-org/my-repo
 GITHUB_ALLOWED_SENDERS=my-login
-REPO_WORKSPACES=my-org/my-repo=/absolute/path/to/my-repo
 CODEX_ALLOW_NETWORK=true
+
+# Optional
+DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...
 ```
 
-`REPO_WORKSPACES` is only needed when the local `.data/bindings.json` cache is missing and the control plane must recover a thread from GitHub. It maps a repository to the checkout/worktree that Codex should resume in.
-
 `CODEX_ALLOW_NETWORK=true` is required if Codex itself should push branches, create PRs, or post completion comments. The control plane's own GitHub binding registry uses local `gh api` independently.
+
+`REPO_WORKSPACES` and `GH_BIN` are optional advanced overrides. Most local setups do not need them. `REPO_WORKSPACES` is useful only when the local binding cache is gone and the control plane must recover a GitHub thread binding but no longer knows the repository's local checkout path.
 
 Start:
 
 ```bash
 bun run start
 ```
+
+Startup logs show whether Discord notifications are enabled:
+
+```text
+[bridge] Discord notifications: enabled
+```
+
+## Discord completion notifications
+
+Discord notification delivery is owned by the control plane, not by Codex. When a tracked Codex turn emits `turn/completed`, the control plane posts a short notification to Discord. This means Discord delivery does not depend on the task prompt or on Codex remembering to send a message.
+
+### Create the Discord webhook
+
+In Discord:
+
+1. Open the server and channel where you want Codex notifications.
+2. Open **Edit Channel** (or channel settings).
+3. Go to **Integrations** -> **Webhooks**.
+4. Choose **New Webhook**.
+5. Give it a name such as `Codex Control Plane` and select the target channel.
+6. Choose **Copy Webhook URL**.
+
+Put the copied URL into your local `.env`:
+
+```env
+DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/WEBHOOK_ID/WEBHOOK_TOKEN
+```
+
+Treat the webhook URL as a secret. Do not commit it. `.env` is gitignored by this project.
+
+Restart the control plane after changing `.env`:
+
+```bash
+bun run start
+```
+
+### Test Discord without running Codex
+
+The admin API exposes a local-only test endpoint:
+
+```bash
+curl -X POST http://127.0.0.1:8788/notifications/test
+```
+
+Expected response:
+
+```json
+{"ok":true,"provider":"discord"}
+```
+
+The Discord channel should receive:
+
+```text
+✅ Codex Control Plane Discord notifications are configured correctly.
+```
+
+If `DISCORD_WEBHOOK_URL` is not configured, the endpoint returns an error while normal control-plane operation continues without Discord notifications.
+
+### Completion message format
+
+A tracked turn completion produces a concise message similar to:
+
+```text
+✅ Codex completed
+
+danghungtb26/game-farm · PR #269
+Thread: 019...
+Turn: 019...
+https://github.com/danghungtb26/game-farm/pull/269
+```
+
+The notifier also reports non-success terminal statuses such as `failed` or `interrupted`. Discord failures are logged as `[discord] notification failed: ...` and never mark the Codex task itself as failed.
+
+Discord messages disable automatic mentions, so task or repository text cannot accidentally trigger `@everyone` or other mentions.
 
 ## Start a NEW implementation task
 
@@ -103,8 +179,9 @@ The control plane will:
 1. create a new Codex thread;
 2. persist `issue #245 -> threadId` locally and in a hidden GitHub Issue comment;
 3. start the implementation turn;
-4. instruct Codex to create/update a PR whose body includes `Closes #245`;
-5. require Codex to post one completion comment on that PR.
+4. track the turn for Discord completion notification when configured;
+5. instruct Codex to create/update a PR whose body includes `Closes #245`;
+6. require Codex to post one completion comment on that PR.
 
 If the Issue is already bound, `/tasks` returns `409` instead of accidentally creating a second conversation. `forceNewThread=true` exists only for an intentional replacement.
 
@@ -130,6 +207,8 @@ For a PR fix, the resolver tries:
 4. source Issue inferred from branch names such as `issue/245` or `task/245`.
 
 When an Issue binding is found, the PR inherits the same `threadId` and receives its own hidden binding marker. If no original thread can be found, the control plane refuses to create a new fix conversation.
+
+PR review events, `/codex` commands, and `POST /send` turns are also registered with the Discord notifier, so their completion is reported against the PR rather than the original Issue.
 
 ## Manual binding
 
@@ -210,11 +289,18 @@ Every PR-bound turn requires Codex to post exactly one completion comment contai
 
 New Issue implementation turns require the same completion comment after their PR exists.
 
+GitHub completion comments and Discord completion notifications serve different purposes:
+
+- **GitHub** = durable detailed audit/result.
+- **Discord** = immediate short notification that the Codex turn ended.
+
 ## Security notes
 
 - Always validate `GITHUB_WEBHOOK_SECRET`.
 - Keep repository and sender allowlists narrow.
 - Never expose admin port `8788` through the tunnel.
+- Treat `DISCORD_WEBHOOK_URL` as a secret because it contains the webhook token.
+- Discord notifications disable automatic mentions.
 - GitHub binding markers never store local absolute paths.
 - Only binding markers authored by the currently authenticated `gh` user are trusted.
 - Review/fix flows refuse to invent a new conversation when the original thread cannot be recovered.
