@@ -37,9 +37,12 @@ Open `http://127.0.0.1:5173/`. Vite proxies `/api/*` to the control plane on por
 ## Data
 
 - Durable Issue/PR/thread mappings still come from `.data/bindings.json` and GitHub binding markers.
-- Dashboard transcript/lifecycle events are appended to `.data/task-events.jsonl`.
+- Dashboard lifecycle/new-turn transcript events are appended to `.data/task-events.jsonl`.
+- When a task is opened, the control plane also asks Codex App Server for persisted thread history with `thread/read(includeTurns: true)` and merges it with dashboard-local events.
+- Historical user messages, agent messages, commands and file/tool activity can therefore be shown for threads that existed before the dashboard was installed.
+- Codex `reasoning` items are deliberately excluded from dashboard history and realtime persistence.
+- If persisted Codex history is unavailable (for example an unsupported paginated/unmaterialized thread or a history-read timeout), the dashboard falls back to the locally persisted events instead of failing the task view.
 - Agent text deltas are broadcast live over SSE and are not written token-by-token; the completed agent message is persisted instead.
-- Existing bindings created before the dashboard is installed appear in the task list as `idle`, but their old Codex transcript is not backfilled. New turns are persisted from this version forward.
 
 ## API
 
