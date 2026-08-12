@@ -23,6 +23,7 @@ export type DashboardEvent = {
     | "task.failed"
     | "turn.started"
     | "turn.completed"
+    | "user.message"
     | "agent.delta"
     | "agent.message"
     | "tool.started"
@@ -34,6 +35,7 @@ export type DashboardEvent = {
   repo?: string;
   kind?: "issue" | "pr";
   number?: number;
+  prNumber?: number;
   action?: CodexAction;
   request?: string;
   status?: string;
