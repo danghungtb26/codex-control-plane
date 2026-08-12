@@ -69,6 +69,20 @@ http://127.0.0.1:5173
 
 Vite proxies `/api/*` to `http://127.0.0.1:8787`, including the SSE endpoint.
 
+## Conversation UI
+
+The main transcript follows the newest activity automatically. If you scroll up to inspect older history it stops following the tail and shows a `↓ Latest` control so realtime updates do not pull the viewport away from what you are reading.
+
+Running tasks, tools and live Codex messages have lightweight activity indicators. Codex collaboration items are rendered as subagent cards instead of generic tools. Opening a subagent card splits the conversation view and loads the child Codex thread in a right-hand panel with its own message/tool/file activity and realtime SSE updates. When available, `thread/read` metadata supplies the child agent nickname, role, parent thread and status.
+
+The split panel is backed by:
+
+```text
+GET /api/threads/:threadId
+```
+
+This reads the persisted child thread directly from Codex App Server, so completed subagent work remains inspectable after a page reload. On narrow screens the agent panel becomes a full conversation overlay rather than squeezing both timelines side by side.
+
 ## Cloudflare Tunnel and auth
 
 A production/public deployment can still use one tunnel route:
@@ -98,12 +112,14 @@ If Access is applied to the entire hostname, GitHub webhook requests will also b
 - Codex `reasoning` items are deliberately excluded from dashboard history and realtime persistence.
 - If persisted Codex history is unavailable, the dashboard falls back to locally persisted events instead of failing the task view.
 - Agent text deltas are broadcast live over SSE and are not written token-by-token; the completed agent message is persisted instead.
+- Codex agent-message deltas are not printed to backend stdout; terminal output stays focused on task lifecycle and operational warnings/errors.
 
 ## API
 
 ```text
 GET /api/tasks
 GET /api/tasks/:threadId/events
+GET /api/threads/:threadId       # child/subagent thread detail
 GET /api/events                  # Server-Sent Events
 ```
 
