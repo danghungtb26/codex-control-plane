@@ -17,6 +17,7 @@ export type TurnCompletedEvent = {
   threadId: string;
   turnId: string;
   status: string;
+  finalText: string;
   raw: Record<string, any>;
 };
 
@@ -26,6 +27,7 @@ export class CodexAppServerClient extends EventEmitter {
   private pending = new Map<number, PendingRequest>();
   private activeTurns = new Map<string, string>();
   private turnThreads = new Map<string, string>();
+  private finalAgentMessages = new Map<string, string>();
   private loadedThreads = new Set<string>();
 
   constructor(
@@ -56,6 +58,7 @@ export class CodexAppServerClient extends EventEmitter {
       this.loadedThreads.clear();
       this.activeTurns.clear();
       this.turnThreads.clear();
+      this.finalAgentMessages.clear();
       this.emit("exit", error);
     });
 
@@ -157,7 +160,6 @@ export class CodexAppServerClient extends EventEmitter {
         console.log(`[codex] steering ${threadId} / ${activeTurnId}`);
         return await this.steer(threadId, message);
       } catch (error) {
-        // Race: the turn may have completed between our local check and turn/steer.
         console.warn("[codex] steer failed; retrying as a new turn:", (error as Error).message);
         this.activeTurns.delete(threadId);
       }
@@ -197,7 +199,6 @@ export class CodexAppServerClient extends EventEmitter {
     const id = typeof message.id === "number" ? message.id : undefined;
     const method = typeof message.method === "string" ? message.method : undefined;
 
-    // Response to a request initiated by us.
     if (id !== undefined && !method) {
       const pending = this.pending.get(id);
       if (!pending) return;
@@ -211,7 +212,6 @@ export class CodexAppServerClient extends EventEmitter {
       return;
     }
 
-    // Server-initiated request (approvals / input). POC policy: never elevate.
     if (id !== undefined && method) {
       if (
         method === "item/commandExecution/requestApproval" ||
@@ -248,17 +248,31 @@ export class CodexAppServerClient extends EventEmitter {
       return;
     }
 
+    if (method === "item/completed") {
+      const item = params.item ?? {};
+      if (item.type === "agentMessage" && typeof item.text === "string") {
+        const turnId = String(params.turnId ?? this.activeTurns.get(String(params.threadId ?? "")) ?? "");
+        if (turnId) this.finalAgentMessages.set(turnId, item.text);
+      }
+      return;
+    }
+
     if (method === "turn/completed") {
       const turnId = String(params.turn?.id ?? "");
       const threadId = String(params.threadId ?? this.turnThreads.get(turnId) ?? "");
       const status = String(params.turn?.status ?? "unknown");
+      const finalText = this.finalAgentMessages.get(turnId) ?? "";
       if (threadId && this.activeTurns.get(threadId) === turnId) this.activeTurns.delete(threadId);
-      if (turnId) this.turnThreads.delete(turnId);
+      if (turnId) {
+        this.turnThreads.delete(turnId);
+        this.finalAgentMessages.delete(turnId);
+      }
       console.log(`[codex] turn completed ${turnId}: ${status}`);
       this.emit("turnCompleted", {
         threadId,
         turnId,
         status,
+        finalText,
         raw: params,
       } satisfies TurnCompletedEvent);
       return;
