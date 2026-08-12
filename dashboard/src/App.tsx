@@ -454,6 +454,8 @@ export default function App() {
   }, [selectedThreadId]);
 
   const openAgent = useCallback(async (threadId: string) => {
+    if (threadId === selectedAgentThreadId) return;
+
     setSelectedAgentThreadId(threadId);
     setAgentThread(null);
     setAgentEvents([]);
@@ -469,7 +471,7 @@ export default function App() {
     } finally {
       setAgentLoading(false);
     }
-  }, []);
+  }, [selectedAgentThreadId]);
 
   useEffect(() => {
     const source = new EventSource("/api/events");
