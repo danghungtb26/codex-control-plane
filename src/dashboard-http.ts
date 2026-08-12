@@ -46,7 +46,8 @@ export class DashboardHttp {
       return true;
     }
 
-    if (req.method === "GET" && !url.pathname.startsWith("/api/")) {
+    const isUiAsset = url.pathname === "/" || url.pathname.startsWith("/assets/") || url.pathname === "/favicon.ico";
+    if (req.method === "GET" && isUiAsset) {
       await this.serveUi(url.pathname, res);
       return true;
     }
