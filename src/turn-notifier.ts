@@ -7,20 +7,11 @@ type TurnContext = DiscordNotificationTarget;
 const COMMENT_ID_RE = /^GITHUB_REPORT_COMMENT_ID=(\d+)$/m;
 const COMMENT_URL_RE = /^GITHUB_REPORT_COMMENT_URL=(https:\/\/github\.com\/[^\s]+#issuecomment-\d+)$/m;
 
-const parseReportReceipt = (text: string, context: TurnContext): GithubReportReceipt | null => {
-  const id = text.match(COMMENT_ID_RE)?.[1] ?? "";
-  const url = text.match(COMMENT_URL_RE)?.[1] ?? "";
-  if (!id && !url) return null;
-
-  const idFromUrl = url.match(/#issuecomment-(\d+)$/)?.[1] ?? "";
-  const commentId = id || idFromUrl;
-  const commentUrl =
-    url ||
-    (commentId
-      ? `https://github.com/${context.repo}/${context.kind === "pr" ? "pull" : "issues"}/${context.number}#issuecomment-${commentId}`
-      : "");
+const parseReportReceipt = (text: string): { commentId: string; commentUrl: string } | null => {
+  const commentId = text.match(COMMENT_ID_RE)?.[1] ?? "";
+  const commentUrl = text.match(COMMENT_URL_RE)?.[1] ?? "";
   if (!commentId && !commentUrl) return null;
-  return { commentId, commentUrl, fallback: false };
+  return { commentId, commentUrl };
 };
 
 export class TurnNotifier {
@@ -41,12 +32,40 @@ export class TurnNotifier {
     this.contexts.set(turnId, context);
   }
 
+  private async resolveCodexReceipt(
+    context: TurnContext,
+    finalText: string,
+  ): Promise<GithubReportReceipt | null> {
+    const parsed = parseReportReceipt(finalText);
+    if (!parsed) return null;
+
+    if (parsed.commentId) {
+      const resolved = await this.github.resolveReportReceipt(context.repo, parsed.commentId);
+      if (resolved) return resolved;
+    }
+
+    if (parsed.commentUrl) {
+      const idFromUrl = parsed.commentUrl.match(/#issuecomment-(\d+)$/)?.[1] ?? "";
+      if (idFromUrl) {
+        const resolved = await this.github.resolveReportReceipt(context.repo, idFromUrl);
+        if (resolved) return resolved;
+      }
+      return {
+        commentId: idFromUrl,
+        commentUrl: parsed.commentUrl,
+        fallback: false,
+      };
+    }
+
+    return null;
+  }
+
   private async handleCompleted(event: TurnCompletedEvent) {
     const context = this.contexts.get(event.turnId);
     if (!context) return;
     this.contexts.delete(event.turnId);
 
-    let receipt = parseReportReceipt(event.finalText, context);
+    let receipt = await this.resolveCodexReceipt(context, event.finalText);
     if (!receipt) {
       try {
         receipt = await this.github.postFallbackReport({
