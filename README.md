@@ -152,6 +152,64 @@ PR resolution order:
 
 If the original thread cannot be recovered, no new fix thread is created.
 
+## Interrupt an active turn
+
+`POST /interrupt` stops only the currently active turn. It does **not** delete the durable Codex thread or its GitHub/local binding, so the same conversation can be resumed later with another `/send` or `/codex` command.
+
+Interrupt by PR:
+
+```bash
+curl -sS http://127.0.0.1:8788/interrupt \
+  -H 'content-type: application/json' \
+  -d '{
+    "repo": "my-org/my-repo",
+    "prNumber": 269
+  }' | jq
+```
+
+Interrupt by Issue:
+
+```bash
+curl -sS http://127.0.0.1:8788/interrupt \
+  -H 'content-type: application/json' \
+  -d '{
+    "repo": "my-org/my-repo",
+    "issueNumber": 245
+  }' | jq
+```
+
+Or interrupt the exact conversation directly:
+
+```bash
+curl -sS http://127.0.0.1:8788/interrupt \
+  -H 'content-type: application/json' \
+  -d '{
+    "threadId": "019..."
+  }' | jq
+```
+
+When a turn is active, the response is:
+
+```json
+{
+  "threadId": "019...",
+  "turnId": "019...",
+  "interrupted": true
+}
+```
+
+If the thread exists but is already idle:
+
+```json
+{
+  "threadId": "019...",
+  "turnId": null,
+  "interrupted": false
+}
+```
+
+Interrupted/cancelled turns may still produce a Discord terminal-status notification, but the control plane does not create a fallback GitHub completion report for a user-requested interruption.
+
 ## GitHub completion report contract
 
 Every PR-bound turn requires Codex to post exactly one completion comment with completed/blocked status, summary, files changed, tests/checks and results, and remaining follow-up/blockers.
