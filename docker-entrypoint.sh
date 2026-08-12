@@ -34,9 +34,11 @@ caddy run --config /etc/caddy/Caddyfile --adapter caddyfile &
 CADDY_PID=$!
 
 shutdown() {
+  trap - INT TERM
   kill -TERM "${APP_PID}" "${CADDY_PID}" 2>/dev/null || true
   wait "${APP_PID}" 2>/dev/null || true
   wait "${CADDY_PID}" 2>/dev/null || true
+  exit 0
 }
 
 trap shutdown INT TERM
@@ -53,5 +55,8 @@ if ! kill -0 "${CADDY_PID}" 2>/dev/null; then
   wait "${CADDY_PID}" || STATUS=$?
 fi
 
-shutdown
+kill -TERM "${APP_PID}" "${CADDY_PID}" 2>/dev/null || true
+wait "${APP_PID}" 2>/dev/null || true
+wait "${CADDY_PID}" 2>/dev/null || true
+
 exit "${STATUS}"
