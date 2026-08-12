@@ -1,8 +1,34 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { Binding } from "./types.js";
+import type { Binding, BindingKind } from "./types.js";
 
-const keyOf = (repo: string, prNumber: number) => `${repo.toLowerCase()}#${prNumber}`;
+type LegacyBinding = Partial<Binding> & { prNumber?: number };
+
+const keyOf = (repo: string, kind: BindingKind, number: number) =>
+  `${repo.toLowerCase()}#${kind}:${number}`;
+
+const normalize = (raw: LegacyBinding): Binding | null => {
+  const legacyPr = Number.isInteger(raw.prNumber) ? raw.prNumber : undefined;
+  const kind: BindingKind | undefined =
+    raw.kind === "issue" || raw.kind === "pr" ? raw.kind : legacyPr != null ? "pr" : undefined;
+  const number = raw.number ?? legacyPr;
+
+  if (!raw.repo || !kind || !Number.isInteger(number) || !raw.threadId || !raw.cwd) {
+    return null;
+  }
+
+  const now = new Date().toISOString();
+  return {
+    repo: raw.repo,
+    kind,
+    number: number as number,
+    threadId: raw.threadId,
+    cwd: raw.cwd,
+    sourceIssueNumber: raw.sourceIssueNumber,
+    createdAt: raw.createdAt ?? now,
+    updatedAt: raw.updatedAt ?? now,
+  };
+};
 
 export class BindingStore {
   private readonly filePath: string;
@@ -15,15 +41,27 @@ export class BindingStore {
   async load() {
     try {
       const raw = await readFile(this.filePath, "utf8");
-      const list = JSON.parse(raw) as Binding[];
-      this.bindings = new Map(list.map((binding) => [keyOf(binding.repo, binding.prNumber), binding]));
+      const list = (JSON.parse(raw) as LegacyBinding[])
+        .map(normalize)
+        .filter((binding): binding is Binding => Boolean(binding));
+      this.bindings = new Map(
+        list.map((binding) => [keyOf(binding.repo, binding.kind, binding.number), binding]),
+      );
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
   }
 
-  get(repo: string, prNumber: number) {
-    return this.bindings.get(keyOf(repo, prNumber)) ?? null;
+  get(repo: string, kind: BindingKind, number: number) {
+    return this.bindings.get(keyOf(repo, kind, number)) ?? null;
+  }
+
+  getIssue(repo: string, issueNumber: number) {
+    return this.get(repo, "issue", issueNumber);
+  }
+
+  getPr(repo: string, prNumber: number) {
+    return this.get(repo, "pr", prNumber);
   }
 
   list() {
@@ -31,7 +69,7 @@ export class BindingStore {
   }
 
   async set(input: Omit<Binding, "createdAt" | "updatedAt">) {
-    const key = keyOf(input.repo, input.prNumber);
+    const key = keyOf(input.repo, input.kind, input.number);
     const existing = this.bindings.get(key);
     const now = new Date().toISOString();
     const binding: Binding = {
@@ -44,8 +82,8 @@ export class BindingStore {
     return binding;
   }
 
-  async remove(repo: string, prNumber: number) {
-    const deleted = this.bindings.delete(keyOf(repo, prNumber));
+  async remove(repo: string, kind: BindingKind, number: number) {
+    const deleted = this.bindings.delete(keyOf(repo, kind, number));
     if (deleted) await this.persist();
     return deleted;
   }
