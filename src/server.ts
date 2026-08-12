@@ -69,7 +69,7 @@ const webhookServer = createServer(async (req, res) => {
     }
 
     console.log(
-      `[github] accepted ${event} for ${message.repo}#${message.prNumber} from @${message.sender}`,
+      `[github] accepted ${event} for ${message.repo} ${message.targetKind} #${message.number} from @${message.sender}`,
     );
     dispatcher.enqueue(message);
     return sendJson(res, 202, { ok: true, queued: true });
