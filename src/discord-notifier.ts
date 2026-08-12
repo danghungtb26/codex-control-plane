@@ -8,6 +8,9 @@ export type DiscordNotificationTarget = {
 type DiscordCompletionInput = DiscordNotificationTarget & {
   turnId: string;
   status: string;
+  reportCommentId?: string;
+  reportCommentUrl?: string;
+  reportFallback?: boolean;
 };
 
 const iconFor = (status: string) => {
@@ -30,11 +33,17 @@ export class DiscordNotifier {
 
     const label = input.kind === "pr" ? `PR #${input.number}` : `Issue #${input.number}`;
     const githubUrl = `https://github.com/${input.repo}/${input.kind === "pr" ? "pull" : "issues"}/${input.number}`;
+    const reportLines = [
+      input.reportCommentId ? `GitHub report comment: \`${input.reportCommentId}\`` : "",
+      input.reportCommentUrl ? `Report: ${input.reportCommentUrl}` : "",
+      input.reportFallback ? "Report source: control-plane fallback" : "Report source: Codex",
+    ].filter(Boolean);
     const content = [
       `${iconFor(input.status)} **Codex ${input.status}**`,
       `**${input.repo} · ${label}**`,
       `Thread: \`${input.threadId}\``,
       `Turn: \`${input.turnId}\``,
+      ...reportLines,
       githubUrl,
     ].join("\n");
 
