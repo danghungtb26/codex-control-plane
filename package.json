@@ -6,10 +6,23 @@
   "scripts": {
     "dev": "bun --watch src/server.ts",
     "start": "bun src/server.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit && tsc -p dashboard/tsconfig.json --noEmit",
+    "dashboard:dev": "vite --config dashboard/vite.config.ts",
+    "dashboard:build": "vite build --config dashboard/vite.config.ts",
+    "build": "bun run typecheck && bun run dashboard:build"
+  },
+  "dependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
   },
   "devDependencies": {
+    "@tailwindcss/vite": "latest",
     "@types/bun": "latest",
-    "typescript": "^5.9.0"
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "latest",
+    "tailwindcss": "latest",
+    "typescript": "^5.9.0",
+    "vite": "latest"
   }
 }
