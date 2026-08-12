@@ -39,10 +39,11 @@ const readGitHead = async (cwd: string) => {
   }
 };
 
-const summaryFrom = (finalText: string) => {
+const summaryFrom = (finalText: string, context: TurnContext, status: string) => {
   const explicit = finalText.match(TASK_SUMMARY_RE)?.[1]?.trim();
   if (explicit) return explicit;
-  return finalText
+
+  const cleaned = finalText
     .split("\n")
     .filter(
       (line) =>
@@ -54,6 +55,10 @@ const summaryFrom = (finalText: string) => {
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 600);
+  if (cleaned) return cleaned;
+
+  const request = context.request?.replace(/\s+/g, " ").trim();
+  return `${context.action} ${status}${request ? `: ${request.slice(0, 400)}` : ""}`;
 };
 
 export class TurnNotifier {
@@ -114,7 +119,7 @@ export class TurnNotifier {
       context.commitBefore,
       readGitHead(context.cwd),
     ]);
-    const summary = summaryFrom(event.finalText);
+    const summary = summaryFrom(event.finalText, context, event.status);
 
     let receipt = await this.resolveCodexReceipt(context, event.finalText);
     if (!receipt && !isInterrupted(event.status)) {
