@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { CodexAppServerClient, TurnCompletedEvent } from "./codex-client.js";
+import type { DashboardStore, DashboardTaskContext } from "./dashboard-store.js";
 import type { DiscordNotificationTarget, DiscordNotifier } from "./discord-notifier.js";
 import type { GithubBindingRegistry, GithubReportReceipt } from "./github-binding-registry.js";
 
@@ -19,12 +20,18 @@ type TurnContext = TurnRegistration;
 const COMMENT_ID_RE = /^GITHUB_REPORT_COMMENT_ID=(\d+)$/m;
 const COMMENT_URL_RE = /^GITHUB_REPORT_COMMENT_URL=(https:\/\/github\.com\/[^\s]+#issuecomment-\d+)$/m;
 const TASK_SUMMARY_RE = /^CODEX_TASK_SUMMARY=(.+)$/m;
+const REPORT_PR_RE = /^GITHUB_REPORT_COMMENT_URL=https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/(\d+)#issuecomment-\d+$/m;
 
 const parseReportReceipt = (text: string): { commentId: string; commentUrl: string } | null => {
   const commentId = text.match(COMMENT_ID_RE)?.[1] ?? "";
   const commentUrl = text.match(COMMENT_URL_RE)?.[1] ?? "";
   if (!commentId && !commentUrl) return null;
   return { commentId, commentUrl };
+};
+
+const reportPrNumber = (text: string) => {
+  const value = Number(text.match(REPORT_PR_RE)?.[1]);
+  return Number.isInteger(value) ? value : undefined;
 };
 
 const isInterrupted = (status: string) => {
@@ -63,6 +70,19 @@ const summaryFrom = (finalText: string, context: TurnContext, status: string) =>
   return `${context.action} ${status}${request ? `: ${request.slice(0, 400)}` : ""}`;
 };
 
+const toDashboardContext = (context: TurnRunContext): DashboardTaskContext => ({
+  repo: context.repo,
+  kind: context.kind,
+  number: context.number,
+  threadId: context.threadId,
+  action: context.action,
+  request: context.request,
+  cwd: context.cwd,
+});
+
+const taskLabel = (context: Pick<TurnRunContext, "repo" | "kind" | "number" | "action" | "threadId">) =>
+  `${context.repo} ${context.kind} #${context.number} action=${context.action} thread=${context.threadId}`;
+
 export class TurnNotifier {
   private contexts = new Map<string, TurnContext>();
 
@@ -70,6 +90,7 @@ export class TurnNotifier {
     codex: CodexAppServerClient,
     private readonly github: GithubBindingRegistry,
     private readonly discord: DiscordNotifier,
+    private readonly dashboard?: DashboardStore,
   ) {
     codex.on("turnCompleted", (event: TurnCompletedEvent) => {
       void this.handleCompleted(event);
@@ -90,6 +111,15 @@ export class TurnNotifier {
     run: () => Promise<T>,
   ): Promise<T> {
     const commitBefore = await readGitHead(context.cwd);
+    const dashboardContext = toDashboardContext(context);
+
+    console.log(`[task] start ${taskLabel(context)}`);
+
+    try {
+      await this.dashboard?.recordTaskStarted(dashboardContext, commitBefore);
+    } catch (error) {
+      console.error("[dashboard] start event failed:", (error as Error).message);
+    }
 
     try {
       await this.discord.sendStarted({
@@ -110,6 +140,14 @@ export class TurnNotifier {
       this.register(turn.turnId, { ...context, commitBefore });
       return turn;
     } catch (error) {
+      console.error(`[task] end status=failed ${taskLabel(context)} error=${(error as Error).message}`);
+
+      try {
+        await this.dashboard?.recordTaskFailed(dashboardContext, commitBefore, error as Error);
+      } catch (dashboardError) {
+        console.error("[dashboard] failure event failed:", (dashboardError as Error).message);
+      }
+
       try {
         await this.discord.sendFailure({
           repo: context.repo,
@@ -163,6 +201,24 @@ export class TurnNotifier {
 
     const commitAfter = await readGitHead(context.cwd);
     const summary = summaryFrom(event.finalText, context, event.status);
+
+    console.log(
+      `[task] end status=${event.status} ${taskLabel(context)} turn=${event.turnId} commit=${context.commitBefore || "-"}->${commitAfter || "-"}`,
+    );
+
+    try {
+      await this.dashboard?.recordTurnCompleted({
+        context: toDashboardContext(context),
+        turnId: event.turnId,
+        status: event.status,
+        summary,
+        commitBefore: context.commitBefore,
+        commitAfter,
+        prNumber: reportPrNumber(event.finalText),
+      });
+    } catch (error) {
+      console.error("[dashboard] completion event failed:", (error as Error).message);
+    }
 
     let receipt = await this.resolveCodexReceipt(context, event.finalText);
     if (!receipt && !isInterrupted(event.status)) {

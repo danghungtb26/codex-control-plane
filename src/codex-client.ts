@@ -21,6 +21,11 @@ export type TurnCompletedEvent = {
   raw: Record<string, any>;
 };
 
+export type CodexNotificationEvent = {
+  method: string;
+  params: Record<string, any>;
+};
+
 export class CodexAppServerClient extends EventEmitter {
   private proc?: ChildProcessWithoutNullStreams;
   private nextRequestId = 1;
@@ -116,6 +121,14 @@ export class CodexAppServerClient extends EventEmitter {
     return result.thread;
   }
 
+  async readThread(threadId: string, includeTurns = true) {
+    const result = await this.request("thread/read", {
+      threadId,
+      includeTurns,
+    });
+    return result.thread as Record<string, any>;
+  }
+
   async startTurn(threadId: string, message: string, options: StartTurnOptions = {}) {
     await this.ensureThreadLoaded(threadId);
 
@@ -179,7 +192,6 @@ export class CodexAppServerClient extends EventEmitter {
     const activeTurnId = this.activeTurns.get(threadId);
     if (activeTurnId) {
       try {
-        console.log(`[codex] steering ${threadId} / ${activeTurnId}`);
         return await this.steer(threadId, message);
       } catch (error) {
         console.warn("[codex] steer failed; retrying as a new turn:", (error as Error).message);
@@ -187,7 +199,6 @@ export class CodexAppServerClient extends EventEmitter {
       }
     }
 
-    console.log(`[codex] starting new turn on ${threadId}`);
     return this.startTurn(threadId, message, options);
   }
 
@@ -261,6 +272,45 @@ export class CodexAppServerClient extends EventEmitter {
 
     if (!method) return;
     const params = (message.params ?? {}) as Record<string, any>;
+    this.emit("notification", { method, params } satisfies CodexNotificationEvent);
+
+    if (method === "thread/started") {
+      const thread = (params.thread ?? {}) as Record<string, any>;
+      const childThreadId = String(thread.id ?? "");
+      const parentThreadId = String(thread.parentThreadId ?? "");
+
+      if (childThreadId && parentThreadId) {
+        const agentNickname = typeof thread.agentNickname === "string" ? thread.agentNickname : undefined;
+        const agentRole = typeof thread.agentRole === "string" ? thread.agentRole : undefined;
+        const agentStatus = thread.status ?? { type: "active" };
+
+        this.emit("notification", {
+          method: "item/started",
+          params: {
+            threadId: parentThreadId,
+            item: {
+              id: `subagent:${childThreadId}`,
+              type: "collabAgentToolCall",
+              tool: "spawn_agent",
+              status: "inProgress",
+              senderThreadId: parentThreadId,
+              receiverThreadIds: [childThreadId],
+              receiverAgents: [
+                {
+                  threadId: childThreadId,
+                  agentNickname,
+                  agentRole,
+                },
+              ],
+              agentsStates: {
+                [childThreadId]: agentStatus,
+              },
+            },
+          },
+        } satisfies CodexNotificationEvent);
+      }
+      return;
+    }
 
     if (method === "turn/started") {
       const threadId = String(params.threadId ?? "");
@@ -291,7 +341,6 @@ export class CodexAppServerClient extends EventEmitter {
         this.turnThreads.delete(turnId);
         this.finalAgentMessages.delete(turnId);
       }
-      console.log(`[codex] turn completed ${turnId}: ${status}`);
       this.emit("turnCompleted", {
         threadId,
         turnId,
@@ -299,12 +348,6 @@ export class CodexAppServerClient extends EventEmitter {
         finalText,
         raw: params,
       } satisfies TurnCompletedEvent);
-      return;
-    }
-
-    if (method === "item/agentMessage/delta") {
-      const delta = typeof params.delta === "string" ? params.delta : "";
-      if (delta) process.stdout.write(delta);
       return;
     }
 

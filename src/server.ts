@@ -1,9 +1,11 @@
 import { createServer } from "node:http";
 import { BindingResolver } from "./binding-resolver.js";
 import { BindingStore } from "./binding-store.js";
-import { CodexAppServerClient } from "./codex-client.js";
+import { CodexAppServerClient, type CodexNotificationEvent } from "./codex-client.js";
 import { withGithubCompletionComment, withGithubIssueImplementation } from "./codex-prompt.js";
 import { loadConfig } from "./config.js";
+import { DashboardHttp } from "./dashboard-http.js";
+import { DashboardStore } from "./dashboard-store.js";
 import { DiscordNotifier } from "./discord-notifier.js";
 import { ReviewDispatcher } from "./dispatcher.js";
 import { GithubBindingRegistry } from "./github-binding-registry.js";
@@ -14,6 +16,8 @@ import { TurnNotifier } from "./turn-notifier.js";
 const config = loadConfig();
 const store = new BindingStore();
 await store.load();
+const dashboard = new DashboardStore();
+await dashboard.load();
 
 const githubBindings = new GithubBindingRegistry(config.ghBin);
 const resolver = new BindingResolver(store, githubBindings, config);
@@ -23,7 +27,11 @@ const codex = new CodexAppServerClient(
   config.codexAutoApprove,
 );
 const discord = new DiscordNotifier(config.discordWebhookUrl);
-const turnNotifier = new TurnNotifier(codex, githubBindings, discord);
+const turnNotifier = new TurnNotifier(codex, githubBindings, discord, dashboard);
+const dashboardHttp = new DashboardHttp(dashboard, store, codex);
+codex.on("notification", (event: CodexNotificationEvent) => {
+  dashboard.recordCodexNotification(event);
+});
 await codex.start();
 
 const dispatcher = new ReviewDispatcher(resolver, codex, turnNotifier, config);
@@ -63,62 +71,66 @@ const resolveInterruptThread = async (body: Record<string, any>) => {
   throw new Error("threadId, or repo with issueNumber/prNumber, is required");
 };
 
-const webhookServer = createServer(async (req, res) => {
+const handleGithubWebhook = async (req: Parameters<typeof readBody>[0], res: Parameters<typeof sendJson>[0]) => {
+  if (req.method !== "POST") {
+    return sendJson(res, 405, { error: "method not allowed" });
+  }
+
+  const rawBody = await readBody(req);
+  const signature = req.headers["x-hub-signature-256"] as string | undefined;
+  if (!verifyGithubSignature(rawBody, signature, config.githubWebhookSecret)) {
+    return sendJson(res, 401, { error: "invalid signature" });
+  }
+
+  const deliveryId = String(req.headers["x-github-delivery"] ?? "");
+  if (rememberDelivery(deliveryId)) {
+    return sendJson(res, 200, { ok: true, duplicate: true });
+  }
+
+  const event = String(req.headers["x-github-event"] ?? "");
+  const payload = JSON.parse(rawBody.toString("utf8"));
+  if (event === "ping") {
+    console.log("[github] ping received");
+    return sendJson(res, 200, { ok: true, pong: true });
+  }
+
+  const message = parseGithubEvent(event, payload, config);
+  if (!message) {
+    console.log(`[github] ignored event=${event} action=${payload.action ?? ""}`);
+    return sendJson(res, 200, { ok: true, ignored: true });
+  }
+
+  console.log(
+    `[github] accepted /codex:${message.action} from ${event} for ${message.repo} ${message.targetKind} #${message.number} from @${message.sender}`,
+  );
+  dispatcher.enqueue(message);
+  return sendJson(res, 202, { ok: true, queued: true, command: message.action });
+};
+
+const server = createServer(async (req, res) => {
   try {
-    if (req.method === "GET" && req.url === "/health") {
+    const url = new URL(req.url ?? "/", "http://127.0.0.1");
+
+    if (req.method === "GET" && url.pathname === "/health") {
       return sendJson(res, 200, { ok: true });
     }
-    if (req.method !== "POST" || req.url !== "/github/webhook") {
-      return sendJson(res, 404, { error: "not found" });
+
+    if (url.pathname === "/github/webhook") {
+      return await handleGithubWebhook(req, res);
     }
 
-    const rawBody = await readBody(req);
-    const signature = req.headers["x-hub-signature-256"] as string | undefined;
-    if (!verifyGithubSignature(rawBody, signature, config.githubWebhookSecret)) {
-      return sendJson(res, 401, { error: "invalid signature" });
-    }
+    if (await dashboardHttp.handle(req, res)) return;
 
-    const deliveryId = String(req.headers["x-github-delivery"] ?? "");
-    if (rememberDelivery(deliveryId)) {
-      return sendJson(res, 200, { ok: true, duplicate: true });
-    }
-
-    const event = String(req.headers["x-github-event"] ?? "");
-    const payload = JSON.parse(rawBody.toString("utf8"));
-    if (event === "ping") {
-      console.log("[github] ping received");
-      return sendJson(res, 200, { ok: true, pong: true });
-    }
-
-    const message = parseGithubEvent(event, payload, config);
-    if (!message) {
-      console.log(`[github] ignored event=${event} action=${payload.action ?? ""}`);
-      return sendJson(res, 200, { ok: true, ignored: true });
-    }
-
-    console.log(
-      `[github] accepted /codex:${message.action} from ${event} for ${message.repo} ${message.targetKind} #${message.number} from @${message.sender}`,
-    );
-    dispatcher.enqueue(message);
-    return sendJson(res, 202, { ok: true, queued: true, command: message.action });
-  } catch (error) {
-    console.error("[webhook] error:", error);
-    return sendJson(res, 500, { error: (error as Error).message });
-  }
-});
-
-const adminServer = createServer(async (req, res) => {
-  try {
-    if (req.method === "GET" && req.url === "/bindings") {
+    if (req.method === "GET" && url.pathname === "/bindings") {
       return sendJson(res, 200, store.list());
     }
 
-    if (req.method === "POST" && req.url === "/notifications/test") {
+    if (req.method === "POST" && url.pathname === "/notifications/test") {
       await discord.sendTest();
       return sendJson(res, 200, { ok: true, provider: "discord" });
     }
 
-    if (req.method === "POST" && req.url === "/interrupt") {
+    if (req.method === "POST" && url.pathname === "/interrupt") {
       const body = JSON.parse((await readBody(req)).toString("utf8"));
       try {
         const threadId = await resolveInterruptThread(body);
@@ -129,7 +141,7 @@ const adminServer = createServer(async (req, res) => {
       }
     }
 
-    if (req.method === "POST" && req.url === "/bindings") {
+    if (req.method === "POST" && url.pathname === "/bindings") {
       const body = JSON.parse((await readBody(req)).toString("utf8"));
       const repo = String(body.repo ?? "");
       const kind = body.kind === "issue" ? "issue" : "pr";
@@ -152,7 +164,7 @@ const adminServer = createServer(async (req, res) => {
       return sendJson(res, 201, binding);
     }
 
-    if (req.method === "POST" && req.url === "/tasks") {
+    if (req.method === "POST" && url.pathname === "/tasks") {
       const body = JSON.parse((await readBody(req)).toString("utf8"));
       const repo = String(body.repo ?? "");
       const issueNumber = Number(body.issueNumber);
@@ -238,7 +250,7 @@ const adminServer = createServer(async (req, res) => {
       return sendJson(res, 201, { binding, turn, legacyMode: true });
     }
 
-    if (req.method === "POST" && req.url === "/send") {
+    if (req.method === "POST" && url.pathname === "/send") {
       const body = JSON.parse((await readBody(req)).toString("utf8"));
       const repo = String(body.repo ?? "").trim();
       const issueNumber = Number(body.issueNumber);
@@ -312,23 +324,23 @@ const adminServer = createServer(async (req, res) => {
 
     return sendJson(res, 404, { error: "not found" });
   } catch (error) {
-    console.error("[admin] error:", error);
+    const path = new URL(req.url ?? "/", "http://127.0.0.1").pathname;
+    console.error(path === "/github/webhook" ? "[webhook] error:" : "[server] error:", error);
     return sendJson(res, 500, { error: (error as Error).message });
   }
 });
 
-webhookServer.listen(config.webhookPort, "127.0.0.1", () => {
-  console.log(`[bridge] GitHub webhook: http://127.0.0.1:${config.webhookPort}/github/webhook`);
-});
-adminServer.listen(config.adminPort, "127.0.0.1", () => {
-  console.log(`[bridge] local admin API: http://127.0.0.1:${config.adminPort}`);
+server.listen(config.port, "127.0.0.1", () => {
+  const base = `http://127.0.0.1:${config.port}`;
+  console.log(`[bridge] control plane: ${base}`);
+  console.log(`[bridge] dashboard: ${base}/`);
+  console.log(`[bridge] GitHub webhook: ${base}/github/webhook`);
   console.log(`[bridge] Discord notifications: ${discord.enabled ? "enabled" : "disabled"}`);
 });
 
 const shutdown = () => {
   console.log("\n[bridge] shutting down");
-  webhookServer.close();
-  adminServer.close();
+  server.close();
   codex.stop();
 };
 process.on("SIGINT", shutdown);

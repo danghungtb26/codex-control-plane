@@ -29,6 +29,14 @@ const readInt = (name: string, fallback: number) => {
   return value;
 };
 
+const readPort = () => {
+  const raw = process.env.PORT ?? process.env.ADMIN_PORT ?? process.env.WEBHOOK_PORT;
+  if (!raw) return 8787;
+  const value = Number.parseInt(raw, 10);
+  if (!Number.isFinite(value)) throw new Error("PORT must be an integer");
+  return value;
+};
+
 const readBool = (name: string, fallback: boolean) => {
   const raw = process.env[name];
   if (raw == null) return fallback;
@@ -50,8 +58,7 @@ export const loadConfig = () => {
     allowedRepos,
     allowedSenders,
     repoWorkspaces: readRepoWorkspaces(process.env.REPO_WORKSPACES),
-    webhookPort: readInt("WEBHOOK_PORT", 8787),
-    adminPort: readInt("ADMIN_PORT", 8788),
+    port: readPort(),
     codexBin: process.env.CODEX_BIN?.trim() || "codex",
     ghBin: process.env.GH_BIN?.trim() || "gh",
     discordWebhookUrl: process.env.DISCORD_WEBHOOK_URL?.trim() || undefined,

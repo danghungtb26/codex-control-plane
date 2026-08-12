@@ -1,0 +1,30 @@
+{
+    auto_https off
+}
+
+:8080 {
+    @githubWebhook path /github/webhook
+    @protected not path /github/webhook
+
+    basic_auth @protected {
+        {$CADDY_AUTH_USERNAME} {$CADDY_AUTH_PASSWORD_HASH}
+    }
+
+    handle @githubWebhook {
+        reverse_proxy {$CORE_URL}
+    }
+
+    @backend path /api/* /tasks /send /interrupt /bindings /notifications/* /health
+    handle @backend {
+        reverse_proxy {$CORE_URL}
+    }
+
+    handle {
+        root * /srv/dashboard
+        route {
+            try_files {path} /index.html
+            header /index.html Cache-Control "public, max-age=0, must-revalidate"
+            file_server
+        }
+    }
+}

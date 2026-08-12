@@ -16,8 +16,28 @@ type PendingBatch = {
   timer: NodeJS.Timeout;
 };
 
+type UsableBinding = {
+  binding: Binding;
+  recoveredFromThreadId?: string;
+};
+
+const isMissingRolloutError = (error: unknown) => {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return /"code"\s*:\s*-32600/.test(message) && /no rollout found for thread id/i.test(message);
+};
+
+const withRecoveryContext = (prompt: string, recoveredFromThreadId?: string) => {
+  if (!recoveredFromThreadId) return prompt;
+  return [
+    prompt,
+    "Control-plane recovery note:",
+    `The previous durable Codex thread ${recoveredFromThreadId} could not be resumed because its local rollout was unavailable. This is a replacement durable thread. Reconstruct any missing context from GitHub, the current branch/worktree, commits, tests, and review history before making changes.`,
+  ].join("\n\n");
+};
+
 export class ReviewDispatcher {
   private pending = new Map<string, PendingBatch>();
+  private freshThreads = new Set<string>();
 
   constructor(
     private readonly resolver: BindingResolver,
@@ -85,6 +105,7 @@ export class ReviewDispatcher {
     }
 
     const { threadId } = await this.codex.startThread(cwd);
+    this.freshThreads.add(threadId);
     return this.resolver.bind({
       repo: message.repo,
       kind: "issue",
@@ -94,7 +115,91 @@ export class ReviewDispatcher {
     });
   }
 
-  private async sendIssueTurn(message: DispatchMessage, binding: Binding, prompt: string) {
+  private async createPrBinding(message: DispatchMessage) {
+    const cwd = this.resolver.getWorkspace(message.repo);
+    if (!cwd) {
+      throw new Error(
+        `PR ${message.repo}#${message.number} has no durable Codex thread and no local workspace is known. Bind the repository once through POST /tasks or set REPO_WORKSPACES.`,
+      );
+    }
+
+    const { threadId } = await this.codex.startThread(cwd);
+    this.freshThreads.add(threadId);
+    console.warn(
+      `[dispatcher] no durable binding for ${message.repo} PR #${message.number}; created replacement thread ${threadId}`,
+    );
+    return this.resolver.bind({
+      repo: message.repo,
+      kind: "pr",
+      number: message.number,
+      threadId,
+      cwd,
+    });
+  }
+
+  private async ensureUsableBinding(binding: Binding): Promise<UsableBinding> {
+    if (this.freshThreads.delete(binding.threadId) || this.codex.getActiveTurn(binding.threadId)) {
+      return { binding };
+    }
+
+    try {
+      await this.codex.resumeThread(binding.threadId);
+      return { binding };
+    } catch (error) {
+      if (!isMissingRolloutError(error)) {
+        // Preserve the existing tracked failure path for every error except the
+        // explicit "rollout is gone" recovery case. codex.send() will retry the
+        // resume inside TurnNotifier.runTracked and report failure normally.
+        return { binding };
+      }
+
+      const previousThreadId = binding.threadId;
+      const { threadId } = await this.codex.startThread(binding.cwd);
+      console.warn(
+        `[dispatcher] missing rollout for ${previousThreadId}; created replacement thread ${threadId} for ${binding.repo} ${binding.kind} #${binding.number}`,
+      );
+
+      const rebound = await this.resolver.bind(
+        {
+          repo: binding.repo,
+          kind: binding.kind,
+          number: binding.number,
+          threadId,
+          cwd: binding.cwd,
+          sourceIssueNumber: binding.sourceIssueNumber,
+        },
+        true,
+      );
+
+      if (binding.kind === "pr" && binding.sourceIssueNumber) {
+        try {
+          await this.resolver.bind(
+            {
+              repo: binding.repo,
+              kind: "issue",
+              number: binding.sourceIssueNumber,
+              threadId,
+              cwd: binding.cwd,
+            },
+            true,
+          );
+        } catch (sourceError) {
+          console.warn(
+            `[binding] replacement thread ${threadId} is bound to PR #${binding.number}, but source Issue #${binding.sourceIssueNumber} could not be updated: ${(sourceError as Error).message}`,
+          );
+        }
+      }
+
+      return { binding: rebound, recoveredFromThreadId: previousThreadId };
+    }
+  }
+
+  private async sendIssueTurn(
+    message: DispatchMessage,
+    binding: Binding,
+    prompt: string,
+    recoveredFromThreadId?: string,
+  ) {
     return this.notifier.runTracked(
       {
         repo: message.repo,
@@ -106,7 +211,7 @@ export class ReviewDispatcher {
         cwd: binding.cwd,
       },
       () =>
-        this.codex.send(binding.threadId, prompt, {
+        this.codex.send(binding.threadId, withRecoveryContext(prompt, recoveredFromThreadId), {
           cwd: binding.cwd,
           allowNetwork: this.config.codexAllowNetwork,
         }),
@@ -114,7 +219,8 @@ export class ReviewDispatcher {
   }
 
   private async dispatchIssueCommand(message: DispatchMessage) {
-    const binding = await this.ensureIssueBinding(message);
+    const resolved = await this.ensureIssueBinding(message);
+    const { binding, recoveredFromThreadId } = await this.ensureUsableBinding(resolved);
 
     if (message.action === "implement") {
       console.log(`[dispatcher] implement issue ${message.repo}#${message.number} on ${binding.threadId}`);
@@ -126,6 +232,7 @@ export class ReviewDispatcher {
           issueNumber: message.number,
           task: message.text,
         }),
+        recoveredFromThreadId,
       );
     }
 
@@ -139,6 +246,7 @@ export class ReviewDispatcher {
           issueNumber: message.number,
           task: message.text,
         }),
+        recoveredFromThreadId,
       );
     }
 
@@ -153,6 +261,7 @@ export class ReviewDispatcher {
           number: message.number,
           task: message.text,
         }),
+        recoveredFromThreadId,
       );
     }
 
@@ -162,23 +271,24 @@ export class ReviewDispatcher {
   private async dispatchPrBatch(messages: DispatchMessage[]) {
     const first = messages[0];
     if (!first) return;
-
-    const binding = await this.resolver.resolvePr(first.repo, first.number);
-    if (!binding) {
-      console.warn(
-        `[dispatcher] no durable thread binding for ${first.repo}#${first.number}; refusing to create a new PR conversation`,
-      );
-      return;
+    if (first.action !== "summary" && first.action !== "fix-comment") {
+      throw new Error(`/codex:${first.action} is not valid on a PR`);
     }
+
+    const resolved = (await this.resolver.resolvePr(first.repo, first.number)) ?? (await this.createPrBinding(first));
+    const { binding, recoveredFromThreadId } = await this.ensureUsableBinding(resolved);
 
     if (first.action === "summary") {
       const request = messages.map((message) => message.text).filter(Boolean).join("\n\n");
-      const prompt = withGithubSummary({
-        repo: first.repo,
-        kind: "pr",
-        number: first.number,
-        task: request,
-      });
+      const prompt = withRecoveryContext(
+        withGithubSummary({
+          repo: first.repo,
+          kind: "pr",
+          number: first.number,
+          task: request,
+        }),
+        recoveredFromThreadId,
+      );
       console.log(`[dispatcher] summarize PR ${first.repo}#${first.number} on ${binding.threadId}`);
       return this.notifier.runTracked(
         {
@@ -198,17 +308,13 @@ export class ReviewDispatcher {
       );
     }
 
-    if (first.action !== "fix-comment") {
-      throw new Error(`/codex:${first.action} is not valid on a PR`);
-    }
-
     const sections = messages.map((message, index) => {
       const source = message.url ? `\nSource: ${message.url}` : "";
       return `Requested fix ${index + 1}:\n${message.text || "Inspect the referenced review comment/thread and fix it."}${source}`;
     });
 
     const task = [
-      `You are continuing work on GitHub PR ${first.repo}#${first.number} in its existing implementation conversation.`,
+      `You are continuing work on GitHub PR ${first.repo}#${first.number}.`,
       "The trusted user explicitly invoked `/codex:fix-comment`. Only now should review feedback be acted on.",
       ...sections,
       "If the command itself does not contain a concrete finding, inspect the PR's current review comments/threads and identify the actionable feedback that the command is authorizing you to fix.",
@@ -217,11 +323,14 @@ export class ReviewDispatcher {
       "Do not merge the PR.",
     ].join("\n\n");
 
-    const prompt = withGithubCompletionComment({
-      repo: first.repo,
-      prNumber: first.number,
-      task,
-    });
+    const prompt = withRecoveryContext(
+      withGithubCompletionComment({
+        repo: first.repo,
+        prNumber: first.number,
+        task,
+      }),
+      recoveredFromThreadId,
+    );
 
     console.log(`[dispatcher] fix-comment: forwarding ${messages.length} command(s) to ${binding.threadId}`);
     const request =
