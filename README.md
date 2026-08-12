@@ -157,9 +157,9 @@ No second production tunnel or port is required.
 
 ## Cloudflare Access / gateway auth
 
-Cloudflare Access is optional and is not configured by this application.
+Cloudflare Access is optional and is not configured by this application. Cloudflare currently offers a Free Zero Trust plan for teams under 50 users, so Access itself does not require a paid plan for a small personal deployment.
 
-This project no longer recommends or requires an Access Bypass policy for `/github/webhook`.
+This project does not recommend or require an Access Bypass policy for `/github/webhook`.
 
 Important deployment constraint: if Access is placed in front of the **entire** `codex.example.com` hostname, GitHub webhook requests are also subject to Access authentication and normally cannot reach `/github/webhook`. Choose the final gateway/auth ingress layout before enabling hostname-wide Access.
 
