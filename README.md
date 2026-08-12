@@ -26,7 +26,7 @@ Core rules:
 The production runtime serves everything from one port:
 
 ```text
-http://127.0.0.1:8788/
+http://127.0.0.1:8787/
 ├── /                         React dashboard
 ├── /api/tasks                task list
 ├── /api/tasks/:thread/events transcript/history
@@ -42,7 +42,7 @@ http://127.0.0.1:8788/
 The canonical env is:
 
 ```env
-PORT=8788
+PORT=8787
 ```
 
 For migration compatibility only, when `PORT` is missing the server falls back to `ADMIN_PORT`, then `WEBHOOK_PORT`. Runtime still listens on exactly one port.
@@ -60,7 +60,7 @@ Minimal `.env`:
 GITHUB_WEBHOOK_SECRET=...
 GITHUB_ALLOWED_REPOS=my-org/my-repo
 GITHUB_ALLOWED_SENDERS=my-login
-PORT=8788
+PORT=8787
 
 CODEX_BIN=codex
 CODEX_AUTO_APPROVE=true
@@ -86,7 +86,7 @@ bun run start
 Open:
 
 ```text
-http://127.0.0.1:8788/
+http://127.0.0.1:8787/
 ```
 
 ## Development
@@ -100,7 +100,7 @@ bun run dev
 ```
 
 ```text
-http://127.0.0.1:8788
+http://127.0.0.1:8787
 ```
 
 Terminal 2 — dashboard:
@@ -113,7 +113,7 @@ bun run dashboard:dev
 http://127.0.0.1:5173
 ```
 
-Vite proxies `/api/*` to `http://127.0.0.1:8788`, including the SSE endpoint. Production remains single-origin; the second port exists only during local frontend development.
+Vite proxies `/api/*` to `http://127.0.0.1:8787`, including the SSE endpoint. Production remains single-origin; the second port exists only during local frontend development.
 
 ## Dashboard
 
@@ -144,7 +144,7 @@ Dashboard lifecycle/new-turn events are appended to:
 A public deployment can use one hostname and one origin service:
 
 ```text
-codex.example.com -> http://127.0.0.1:8788
+codex.example.com -> http://127.0.0.1:8787
 ```
 
 The GitHub webhook becomes:
@@ -170,7 +170,7 @@ Regardless of gateway choice, `GITHUB_WEBHOOK_SECRET` remains required and `/git
 Start an Issue task:
 
 ```bash
-curl -sS http://127.0.0.1:8788/tasks \
+curl -sS http://127.0.0.1:8787/tasks \
   -H 'content-type: application/json' \
   -d '{
     "repo": "my-org/my-repo",
@@ -183,7 +183,7 @@ curl -sS http://127.0.0.1:8788/tasks \
 Send to an existing Issue thread:
 
 ```bash
-curl -sS http://127.0.0.1:8788/send \
+curl -sS http://127.0.0.1:8787/send \
   -H 'content-type: application/json' \
   -d '{
     "repo": "my-org/my-repo",
@@ -195,7 +195,7 @@ curl -sS http://127.0.0.1:8788/send \
 Interrupt an active turn:
 
 ```bash
-curl -sS http://127.0.0.1:8788/interrupt \
+curl -sS http://127.0.0.1:8787/interrupt \
   -H 'content-type: application/json' \
   -d '{"repo":"my-org/my-repo","issueNumber":245}' | jq
 ```
