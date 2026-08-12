@@ -160,6 +160,20 @@ export class CodexAppServerClient extends EventEmitter {
     return { threadId, turnId: String(result.turnId) };
   }
 
+  async interrupt(threadId: string) {
+    const turnId = this.activeTurns.get(threadId);
+    if (!turnId) {
+      return { threadId, turnId: null, interrupted: false };
+    }
+
+    await this.request("turn/interrupt", {
+      threadId,
+      turnId,
+    });
+
+    return { threadId, turnId, interrupted: true };
+  }
+
   async send(threadId: string, message: string, options: StartTurnOptions = {}) {
     await this.ensureThreadLoaded(threadId);
     const activeTurnId = this.activeTurns.get(threadId);
