@@ -237,7 +237,7 @@ The control plane validates the GitHub comment receipt. If a non-interrupted tur
 
 ## Discord notifications
 
-When `DISCORD_WEBHOOK_URL` is configured, each tracked task has a lifecycle notification.
+When `DISCORD_WEBHOOK_URL` is configured, every tracked Codex turn from GitHub commands, `/tasks`, or `/send` has lifecycle notifications.
 
 At task start:
 
@@ -265,7 +265,7 @@ GitHub report comment: 123456789
 Report: https://github.com/...
 ```
 
-A Codex turn ending with status `failed` uses the same terminal notification with a ❌ status. If `turn/start`, `turn/steer`, or the initial send fails before a tracked turn can run to completion, the control plane sends a separate failure notification:
+A Codex turn ending with status `failed` uses the same terminal notification with a ❌ status. If `turn/start`, `turn/steer`, or the initial send throws before a tracked turn can reach terminal completion, the control plane sends a separate failure notification:
 
 ```text
 ❌ Codex task failed before completion
