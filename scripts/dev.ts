@@ -32,7 +32,8 @@ const shutdown = (exitCode = 0) => {
 start(["run", "vite", "build", "--config", "dashboard/vite.config.ts", "--watch"], "dashboard build watcher");
 start(["--watch", "src/server.ts"], "control plane");
 
-console.log("[dev] single-port mode: http://127.0.0.1:${PORT:-8788}/");
+const port = process.env.PORT ?? process.env.ADMIN_PORT ?? process.env.WEBHOOK_PORT ?? "8788";
+console.log(`[dev] single-port mode: http://127.0.0.1:${port}/`);
 console.log("[dev] Vite rebuilds dashboard/dist automatically; refresh the browser after UI edits.");
 
 process.on("SIGINT", () => shutdown(0));
