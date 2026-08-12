@@ -2,6 +2,7 @@ import "./simple-env.js";
 import { createServer } from "node:http";
 import { BindingStore } from "./binding-store.js";
 import { CodexAppServerClient } from "./codex-client.js";
+import { withGithubCompletionComment } from "./codex-prompt.js";
 import { loadConfig } from "./config.js";
 import { ReviewDispatcher } from "./dispatcher.js";
 import { parseGithubEvent, verifyGithubSignature } from "./github-webhook.js";
@@ -103,9 +104,10 @@ const adminServer = createServer(async (req, res) => {
         return sendJson(res, 403, { error: `repo ${repo} is not in GITHUB_ALLOWED_REPOS` });
       }
 
+      const prompt = withGithubCompletionComment({ repo, prNumber, task: message });
       const { threadId } = await codex.startThread(cwd);
       const binding = await store.set({ repo, prNumber, threadId, cwd });
-      const turn = await codex.startTurn(threadId, message, {
+      const turn = await codex.startTurn(threadId, prompt, {
         cwd,
         allowNetwork: config.codexAllowNetwork,
       });
@@ -120,7 +122,9 @@ const adminServer = createServer(async (req, res) => {
       const binding = store.get(repo, prNumber);
       if (!binding) return sendJson(res, 404, { error: "binding not found" });
       if (!message) return sendJson(res, 400, { error: "message is required" });
-      const turn = await codex.send(binding.threadId, message, {
+
+      const prompt = withGithubCompletionComment({ repo, prNumber, task: message });
+      const turn = await codex.send(binding.threadId, prompt, {
         cwd: binding.cwd,
         allowNetwork: config.codexAllowNetwork,
       });
