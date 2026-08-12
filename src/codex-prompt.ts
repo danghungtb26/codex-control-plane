@@ -50,8 +50,9 @@ export const withGithubIssueImplementation = ({ repo, issueNumber, task }: Githu
     "Inspect the issue requirements, repository, and existing working tree first. Use a dedicated branch for this issue, implement the task with minimal maintainable scope, and run the most relevant focused tests plus the broader suite when practical.",
     "Commit the completed implementation locally when appropriate so the resulting commit ID is durable.",
     "Do NOT create or update a pull request in this action. PR creation is a separate `/codex:create-pr` action.",
+    `When implementation work finishes, post exactly one completion comment to GitHub Issue ${repo}#${issueNumber} with status, concise summary, commit/branch information, tests/checks and results, and any blocker/follow-up.`,
+    githubReportReceiptInstructions,
     "Do NOT merge anything.",
-    finalSummaryInstructions,
   ].join("\n\n");
 
 export const withGithubCreatePr = ({ repo, issueNumber, task }: GithubIssueTaskPromptInput) =>
@@ -60,7 +61,7 @@ export const withGithubCreatePr = ({ repo, issueNumber, task }: GithubIssueTaskP
     task.trim(),
     "PR creation workflow:",
     "Inspect the current branch and working tree. Do not discard unrelated local changes. Ensure the intended implementation is committed; do not invent or rewrite work just to create the PR.",
-    "Push the implementation branch, then create or update exactly one pull request for this issue. The PR body must contain `Closes #" + issueNumber + "` so the control plane can inherit the Issue thread.",
+    `Push the implementation branch, then create or update exactly one pull request for this issue. The PR body must contain \`Closes #${issueNumber}\` so the control plane can inherit the Issue thread.`,
     "After the PR exists, post exactly one completion comment on that PR with status, concise summary, commit/branch information, tests/checks already known, and any blocker/follow-up.",
     githubReportReceiptInstructions,
     "Do not merge the PR.",
