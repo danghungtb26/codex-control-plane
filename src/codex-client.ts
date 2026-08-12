@@ -13,6 +13,13 @@ type StartTurnOptions = {
   allowNetwork?: boolean;
 };
 
+export type TurnCompletedEvent = {
+  threadId: string;
+  turnId: string;
+  status: string;
+  raw: Record<string, any>;
+};
+
 export class CodexAppServerClient extends EventEmitter {
   private proc?: ChildProcessWithoutNullStreams;
   private nextRequestId = 1;
@@ -244,10 +251,16 @@ export class CodexAppServerClient extends EventEmitter {
     if (method === "turn/completed") {
       const turnId = String(params.turn?.id ?? "");
       const threadId = String(params.threadId ?? this.turnThreads.get(turnId) ?? "");
+      const status = String(params.turn?.status ?? "unknown");
       if (threadId && this.activeTurns.get(threadId) === turnId) this.activeTurns.delete(threadId);
       if (turnId) this.turnThreads.delete(turnId);
-      console.log(`[codex] turn completed ${turnId}: ${params.turn?.status ?? "unknown"}`);
-      this.emit("turnCompleted", params);
+      console.log(`[codex] turn completed ${turnId}: ${status}`);
+      this.emit("turnCompleted", {
+        threadId,
+        turnId,
+        status,
+        raw: params,
+      } satisfies TurnCompletedEvent);
       return;
     }
 
