@@ -21,6 +21,11 @@ export type TurnCompletedEvent = {
   raw: Record<string, any>;
 };
 
+export type CodexNotificationEvent = {
+  method: string;
+  params: Record<string, any>;
+};
+
 export class CodexAppServerClient extends EventEmitter {
   private proc?: ChildProcessWithoutNullStreams;
   private nextRequestId = 1;
@@ -261,6 +266,7 @@ export class CodexAppServerClient extends EventEmitter {
 
     if (!method) return;
     const params = (message.params ?? {}) as Record<string, any>;
+    this.emit("notification", { method, params } satisfies CodexNotificationEvent);
 
     if (method === "turn/started") {
       const threadId = String(params.threadId ?? "");
