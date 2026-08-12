@@ -33,6 +33,7 @@ export class CodexAppServerClient extends EventEmitter {
   constructor(
     private readonly codexBin: string,
     private readonly defaultAllowNetwork: boolean,
+    private readonly autoApprove: boolean,
   ) {
     super();
   }
@@ -83,6 +84,7 @@ export class CodexAppServerClient extends EventEmitter {
 
     const account = await this.request("account/read", { refreshToken: false });
     console.log("[codex] connected account:", JSON.stringify(account));
+    console.log(`[codex] approvals: ${this.autoApprove ? "auto-review" : "deny"}`);
   }
 
   stop() {
@@ -94,7 +96,8 @@ export class CodexAppServerClient extends EventEmitter {
   async startThread(cwd: string) {
     const result = await this.request("thread/start", {
       cwd,
-      approvalPolicy: "never",
+      approvalPolicy: this.autoApprove ? "on-request" : "never",
+      ...(this.autoApprove ? { approvalsReviewer: "auto_review" } : {}),
       sandbox: "workspace-write",
       serviceName: "codex_control_plane",
     });
@@ -107,7 +110,8 @@ export class CodexAppServerClient extends EventEmitter {
   async resumeThread(threadId: string) {
     const result = await this.request("thread/resume", {
       threadId,
-      approvalPolicy: "never",
+      approvalPolicy: this.autoApprove ? "on-request" : "never",
+      ...(this.autoApprove ? { approvalsReviewer: "auto_review" } : {}),
       sandbox: "workspace-write",
     });
     this.loadedThreads.add(threadId);
@@ -120,7 +124,8 @@ export class CodexAppServerClient extends EventEmitter {
     const params: Record<string, unknown> = {
       threadId,
       input: [{ type: "text", text: message }],
-      approvalPolicy: "never",
+      approvalPolicy: this.autoApprove ? "on-request" : "never",
+      ...(this.autoApprove ? { approvalsReviewer: "auto_review" } : {}),
     };
 
     const allowNetwork = options.allowNetwork ?? this.defaultAllowNetwork;
@@ -217,12 +222,14 @@ export class CodexAppServerClient extends EventEmitter {
         method === "item/commandExecution/requestApproval" ||
         method === "item/fileChange/requestApproval"
       ) {
-        this.sendRaw({ id, result: { decision: "decline" } });
+        this.sendRaw({ id, result: { decision: this.autoApprove ? "accept" : "decline" } });
         return;
       }
 
       if (method === "item/permissions/requestApproval") {
-        this.sendRaw({ id, result: { permissions: {} } });
+        const params = (message.params ?? {}) as Record<string, any>;
+        const requested = (params.permissions ?? {}) as Record<string, unknown>;
+        this.sendRaw({ id, result: { permissions: this.autoApprove ? requested : {} } });
         return;
       }
 
