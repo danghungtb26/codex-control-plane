@@ -29,6 +29,10 @@ export class BindingResolver {
     return binding;
   }
 
+  getWorkspace(repo: string) {
+    return this.store.getWorkspace(repo) ?? this.config.repoWorkspaces.get(repo.toLowerCase()) ?? null;
+  }
+
   async resolveIssue(repo: string, issueNumber: number, cwdHint?: string) {
     const local = this.store.getIssue(repo, issueNumber);
     if (local) return local;
@@ -73,10 +77,10 @@ export class BindingResolver {
   }
 
   private async materialize(remote: RemoteBindingMarker, cwdHint?: string) {
-    const cwd = cwdHint ?? this.config.repoWorkspaces.get(remote.repo.toLowerCase());
+    const cwd = cwdHint ?? this.getWorkspace(remote.repo);
     if (!cwd) {
       throw new Error(
-        `Recovered thread ${remote.threadId} from GitHub for ${remote.repo} ${remote.kind} #${remote.number}, but no local workspace is known. Set REPO_WORKSPACES=${remote.repo}=/absolute/path or bind it once through the admin API.`,
+        `Recovered thread ${remote.threadId} from GitHub for ${remote.repo} ${remote.kind} #${remote.number}, but no local workspace is known. Bind the repository once through the admin API or set REPO_WORKSPACES as an optional recovery override.`,
       );
     }
 
