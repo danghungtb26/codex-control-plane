@@ -54,6 +54,7 @@ export const loadConfig = () => {
     adminPort: readInt("ADMIN_PORT", 8788),
     codexBin: process.env.CODEX_BIN?.trim() || "codex",
     ghBin: process.env.GH_BIN?.trim() || "gh",
+    discordWebhookUrl: process.env.DISCORD_WEBHOOK_URL?.trim() || undefined,
     codexAllowNetwork: readBool("CODEX_ALLOW_NETWORK", false),
     reviewDebounceMs: readInt("REVIEW_DEBOUNCE_MS", 1200),
     forwardInlineReviewComments: readBool("FORWARD_INLINE_REVIEW_COMMENTS", true),
