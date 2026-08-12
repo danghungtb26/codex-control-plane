@@ -1,13 +1,20 @@
+import type { BindingKind, CodexAction } from "./types.js";
+
 export type DiscordNotificationTarget = {
   repo: string;
-  kind: "issue" | "pr";
+  kind: BindingKind;
   number: number;
   threadId: string;
+  action: CodexAction;
+  request?: string;
 };
 
 type DiscordCompletionInput = DiscordNotificationTarget & {
   turnId: string;
   status: string;
+  summary?: string;
+  commitBefore?: string;
+  commitAfter?: string;
   reportCommentId?: string;
   reportCommentUrl?: string;
   reportFallback?: boolean;
@@ -21,6 +28,14 @@ const iconFor = (status: string) => {
   return "ℹ️";
 };
 
+const compact = (value: string | undefined, maxLength: number) => {
+  const normalized = (value ?? "").replace(/\s+/g, " ").trim();
+  if (normalized.length <= maxLength) return normalized;
+  return `${normalized.slice(0, Math.max(0, maxLength - 1))}…`;
+};
+
+const shortSha = (value: string | undefined) => (value ? value.slice(0, 12) : "unknown");
+
 export class DiscordNotifier {
   constructor(private readonly webhookUrl?: string) {}
 
@@ -33,19 +48,32 @@ export class DiscordNotifier {
 
     const label = input.kind === "pr" ? `PR #${input.number}` : `Issue #${input.number}`;
     const githubUrl = `https://github.com/${input.repo}/${input.kind === "pr" ? "pull" : "issues"}/${input.number}`;
+    const before = shortSha(input.commitBefore);
+    const after = shortSha(input.commitAfter);
+    const commitLine = before === after ? `Commit: \`${after}\` (unchanged)` : `Commit: \`${before}\` → \`${after}\``;
     const reportLines = [
       input.reportCommentId ? `GitHub report comment: \`${input.reportCommentId}\`` : "",
       input.reportCommentUrl ? `Report: ${input.reportCommentUrl}` : "",
-      input.reportFallback ? "Report source: control-plane fallback" : "Report source: Codex",
+      input.reportCommentId || input.reportCommentUrl
+        ? input.reportFallback
+          ? "Report source: control-plane fallback"
+          : "Report source: Codex"
+        : "",
     ].filter(Boolean);
     const content = [
       `${iconFor(input.status)} **Codex ${input.status}**`,
       `**${input.repo} · ${label}**`,
+      `Action: \`${input.action}\``,
+      input.request ? `Task: ${compact(input.request, 320)}` : "",
+      commitLine,
+      input.summary ? `Summary: ${compact(input.summary, 600)}` : "",
       `Thread: \`${input.threadId}\``,
       `Turn: \`${input.turnId}\``,
       ...reportLines,
       githubUrl,
-    ].join("\n");
+    ]
+      .filter(Boolean)
+      .join("\n");
 
     const response = await fetch(this.webhookUrl, {
       method: "POST",
