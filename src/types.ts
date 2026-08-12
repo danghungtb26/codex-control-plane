@@ -24,7 +24,8 @@ export type RemoteBindingMarker = {
 
 export type DispatchMessage = {
   repo: string;
-  prNumber: number;
+  targetKind: BindingKind;
+  number: number;
   sender: string;
   kind: "review" | "inline-review" | "command";
   text: string;
