@@ -53,7 +53,7 @@ export type DashboardEvent = {
   agentRole?: string;
   collabTool?: string;
   prompt?: string;
-  agentStatus?: string;
+  agentStatus?: unknown;
 };
 
 export type AgentThread = {
