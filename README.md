@@ -1,56 +1,36 @@
 # Codex Control Plane (local POC)
 
-A local control plane that keeps one durable Codex conversation across a task's implementation and subsequent PR review/fix cycle.
+A local control plane that keeps one durable Codex conversation across implementation and later PR review/fix turns.
 
 ```text
-GitHub Issue / new task
-        │
-        │ POST /tasks (issueNumber)
-        ▼
-new Codex thread
-        │
-        ├── local cache: .data/bindings.json
-        └── GitHub Issue hidden binding marker
-                │
-                │ implementation creates PR with `Closes #123`
-                ▼
-GitHub PR
-        │
-        │ review / /codex command / POST /send
-        ▼
-BindingResolver
-   1. local PR binding
-   2. GitHub PR marker
-   3. linked Issue marker (`Closes #123` or branch `issue/123`)
-        │
-        ▼
-resume the SAME Codex thread
-        │
-        ├── Codex posts completion report to GitHub
-        ├── control-plane falls back only if Codex returns no report receipt
-        └── Discord notification includes the report comment id/link (optional)
+new Issue/task
+  -> new Codex thread
+  -> persist issue -> threadId
+  -> Codex implements and opens PR
+  -> PR inherits the same thread
+  -> review/fix resumes that thread
+  -> Codex posts completion report
+  -> control-plane validates report receipt
+       -> receipt exists: use Codex report
+       -> no receipt: post fallback report
+  -> Discord notification includes GitHub report comment id/link
 ```
 
-## Core rule
+## Core rules
 
-- **New Issue/task** => create a new Codex thread.
-- **Fix/review for an existing PR** => never silently create a new thread. Resolve and resume the original implementation thread.
-- GitHub comments are the durable thread registry; `.data/bindings.json` is only a local cache.
-- **Codex owns the normal completion report.** The control plane posts a fallback report only when Codex does not return a valid GitHub report-comment receipt.
-
-The GitHub binding marker is stored as a hidden HTML comment. It contains the thread ID and relation metadata, but never the absolute local `cwd`.
+- **New Issue/task** creates a new Codex thread.
+- **Existing PR fix/review** must resume the original thread; the control plane refuses to silently create a new fix conversation.
+- GitHub hidden comments are the durable thread registry; `.data/bindings.json` is the local cache.
+- **Codex owns the normal completion report.** The control plane only posts a fallback when Codex returns no valid GitHub report receipt.
 
 ## Prerequisites
-
-- Codex CLI installed and authenticated
-- GitHub CLI (`gh`) installed and authenticated
-- Node.js 20+ or Bun
-- A local checkout/worktree for each managed repository
 
 ```bash
 codex --version
 gh auth status
 ```
+
+You need Codex CLI, authenticated GitHub CLI, Node.js 20+ or Bun, and a local checkout/worktree.
 
 ## Install
 
@@ -59,27 +39,32 @@ bun install
 cp .env.example .env
 ```
 
-Generate a webhook secret:
+Generate the GitHub webhook secret:
 
 ```bash
 openssl rand -hex 32
 ```
 
-Minimal example config:
+Minimal `.env`:
 
 ```env
 GITHUB_WEBHOOK_SECRET=...
 GITHUB_ALLOWED_REPOS=my-org/my-repo
 GITHUB_ALLOWED_SENDERS=my-login
+WEBHOOK_PORT=8787
+ADMIN_PORT=8788
+CODEX_BIN=codex
 CODEX_ALLOW_NETWORK=true
+REVIEW_DEBOUNCE_MS=1200
+FORWARD_INLINE_REVIEW_COMMENTS=true
 
 # Optional
 DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...
 ```
 
-`CODEX_ALLOW_NETWORK=true` is required if Codex itself should push branches, create PRs, or post completion comments. The control plane's own GitHub binding/fallback reporter uses local authenticated `gh api` independently.
+`GH_BIN` and `REPO_WORKSPACES` are optional advanced/recovery overrides and are not required for the normal local flow.
 
-`REPO_WORKSPACES` and `GH_BIN` are optional advanced overrides. Most local setups do not need them. `REPO_WORKSPACES` is useful only when the local binding cache is gone and the control plane must recover a GitHub thread binding but no longer knows the repository's local checkout path.
+`CODEX_ALLOW_NETWORK=true` is required when Codex itself must push, create/update PRs, or post its GitHub completion report. The control plane's binding registry and fallback reporter use local authenticated `gh api` independently.
 
 Start:
 
@@ -87,92 +72,9 @@ Start:
 bun run start
 ```
 
-Startup logs show whether Discord notifications are enabled:
+## Start a new implementation task
 
-```text
-[bridge] Discord notifications: enabled
-```
-
-## Discord completion notifications
-
-Discord notification delivery is owned by the control plane, not by Codex. When a tracked Codex turn emits `turn/completed`, the control plane resolves the GitHub completion-report receipt first and then sends a short Discord message.
-
-### Create the Discord webhook
-
-In Discord:
-
-1. Open the server and channel where you want Codex notifications.
-2. Open **Edit Channel** (or channel settings).
-3. Go to **Integrations** -> **Webhooks**.
-4. Choose **New Webhook**.
-5. Give it a name such as `Codex Control Plane` and select the target channel.
-6. Choose **Copy Webhook URL**.
-
-Put the copied URL into your local `.env`:
-
-```env
-DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/WEBHOOK_ID/WEBHOOK_TOKEN
-```
-
-Treat the webhook URL as a secret. Do not commit it. `.env` is gitignored by this project.
-
-Restart the control plane after changing `.env`:
-
-```bash
-bun run start
-```
-
-### Test Discord without running Codex
-
-The admin API exposes a local-only test endpoint:
-
-```bash
-curl -X POST http://127.0.0.1:8788/notifications/test
-```
-
-Expected response:
-
-```json
-{"ok":true,"provider":"discord"}
-```
-
-The Discord channel should receive:
-
-```text
-✅ Codex Control Plane Discord notifications are configured correctly.
-```
-
-If `DISCORD_WEBHOOK_URL` is not configured, the endpoint returns an error while normal control-plane operation continues without Discord notifications.
-
-### Completion message format
-
-A tracked PR turn produces a concise message similar to:
-
-```text
-✅ Codex completed
-
-danghungtb26/game-farm · PR #269
-Thread: 019...
-Turn: 019...
-GitHub report comment: 123456789
-Report source: Codex
-Report: https://github.com/danghungtb26/game-farm/pull/269#issuecomment-123456789
-https://github.com/danghungtb26/game-farm/pull/269
-```
-
-If Codex failed to return a valid report receipt and the control plane had to post the report itself, Discord shows:
-
-```text
-Report source: control-plane fallback
-```
-
-The notifier also reports non-success terminal statuses such as `failed` or `interrupted`. Discord failures are logged as `[discord] notification failed: ...` and never mark the Codex task itself as failed.
-
-Discord messages disable automatic mentions, so task or repository text cannot accidentally trigger `@everyone` or other mentions.
-
-## Start a NEW implementation task
-
-Use the GitHub Issue number as the task identity:
+Use the GitHub Issue as task identity:
 
 ```bash
 curl -sS http://127.0.0.1:8788/tasks \
@@ -181,24 +83,15 @@ curl -sS http://127.0.0.1:8788/tasks \
     "repo": "my-org/my-repo",
     "issueNumber": 245,
     "cwd": "/absolute/path/to/my-repo",
-    "message": "Implement issue #245, run the relevant tests, push the branch and open a PR."
+    "message": "Implement issue #245, run tests, push the branch and open a PR."
   }' | jq
 ```
 
-The control plane will:
+The control plane creates a new thread and persists the Issue binding. Codex is instructed to create/update a PR containing `Closes #245`, allowing that PR to inherit the same thread later.
 
-1. create a new Codex thread;
-2. persist `issue #245 -> threadId` locally and in a hidden GitHub Issue comment;
-3. start the implementation turn;
-4. track the turn for completion reporting/Discord notification;
-5. instruct Codex to create/update a PR whose body includes `Closes #245`;
-6. require Codex to post one completion comment on that PR and return its receipt.
+Calling `/tasks` again for an already-bound Issue returns `409` unless `forceNewThread=true` is intentionally supplied.
 
-If the Issue is already bound, `/tasks` returns `409` instead of accidentally creating a second conversation. `forceNewThread=true` exists only for an intentional replacement.
-
-## Fix/review an EXISTING PR
-
-Manual send:
+## Fix/review an existing PR
 
 ```bash
 curl -sS http://127.0.0.1:8788/send \
@@ -210,20 +103,18 @@ curl -sS http://127.0.0.1:8788/send \
   }' | jq
 ```
 
-For a PR fix, the resolver tries:
+PR resolution order:
 
 1. local PR binding;
 2. hidden binding marker on the PR;
-3. source Issue discovered from `Closes #<issue>` in the PR body;
+3. source Issue from `Closes #<issue>`;
 4. source Issue inferred from branch names such as `issue/245` or `task/245`.
 
-When an Issue binding is found, the PR inherits the same `threadId` and receives its own hidden binding marker. If no original thread can be found, the control plane refuses to create a new fix conversation.
-
-PR review events, `/codex` commands, and `POST /send` turns are registered with the completion notifier, so their GitHub report receipt and Discord completion message are associated with the PR.
+If the original thread cannot be recovered, no new fix thread is created.
 
 ## GitHub completion report contract
 
-Every PR-bound turn requires Codex to post exactly one completion comment containing:
+Every PR-bound turn requires Codex to post exactly one completion comment with:
 
 - completed/blocked status;
 - concise summary;
@@ -231,65 +122,100 @@ Every PR-bound turn requires Codex to post exactly one completion comment contai
 - tests/checks and results;
 - remaining follow-up/blockers.
 
-After posting the comment, the **final Codex reply** must include machine-readable receipt lines:
+After posting, the **final Codex reply** must include the real GitHub receipt:
 
 ```text
 GITHUB_REPORT_COMMENT_ID=123456789
 GITHUB_REPORT_COMMENT_URL=https://github.com/my-org/my-repo/pull/269#issuecomment-123456789
 ```
 
-Codex must use the real comment id/link returned by GitHub and must never invent them. Either a valid comment ID or a valid comment URL is enough for the control plane to recognize the report; when only the ID is returned, the control plane derives the normal GitHub comment URL from the target.
+Codex must obtain these values from GitHub and must never invent them.
+
+The control plane accepts either ID or URL:
+
+- if an ID is present, it calls `gh api repos/<repo>/issues/comments/<id>` and resolves the authoritative `html_url`;
+- if only a URL is present, it extracts the comment ID when possible and verifies it through GitHub;
+- if no valid receipt can be resolved, the fallback reporter runs.
 
 ### Fallback behavior
 
-On `turn/completed`, the control plane captures the final Codex agent message and looks for the receipt above.
+On `turn/completed`, the control plane captures the final Codex agent reply.
 
-- **Receipt found** => no extra GitHub comment is created. Discord reports the Codex comment id/link and `Report source: Codex`.
-- **No receipt found** => the control plane posts a fallback completion comment using the Codex final result, captures GitHub's real `id` and `html_url`, and sends those to Discord with `Report source: control-plane fallback`.
-- **Fallback GitHub reporting also fails** => the error is logged; Discord still attempts to report the turn completion, but may have no GitHub report id/link.
+**Receipt found:**
 
-For a PR turn, fallback is posted to the PR conversation. For an Issue implementation turn where Codex never produced a PR/report receipt, fallback is posted to the Issue so completion is still durable on GitHub.
-
-Completion comments written by Codex or the fallback reporter do not loop back into Codex because only comments beginning with `/codex` or `/codex-fix` are treated as commands.
-
-## Manual binding
-
-Bind an existing thread to an Issue:
-
-```bash
-curl -sS http://127.0.0.1:8788/bindings \
-  -H 'content-type: application/json' \
-  -d '{
-    "repo": "my-org/my-repo",
-    "kind": "issue",
-    "number": 245,
-    "threadId": "019...",
-    "cwd": "/absolute/path/to/my-repo"
-  }' | jq
+```text
+Codex report -> keep it
+control-plane -> no duplicate comment
+Discord -> Codex report comment id/link
 ```
 
-Or to a PR:
+**Receipt missing/invalid:**
 
-```bash
-curl -sS http://127.0.0.1:8788/bindings \
-  -H 'content-type: application/json' \
-  -d '{
-    "repo": "my-org/my-repo",
-    "kind": "pr",
-    "number": 269,
-    "sourceIssueNumber": 245,
-    "threadId": "019...",
-    "cwd": "/absolute/path/to/my-repo"
-  }' | jq
+```text
+control-plane -> post fallback completion report
+GitHub API -> returns real comment id + html_url
+Discord -> fallback report comment id/link
 ```
 
-List local cache:
+The fallback body includes the Codex final result, turn status, thread ID and turn ID. For PR turns it is posted to the PR conversation. For an Issue implementation turn that never produced a PR receipt, it is posted to the Issue so the result is still durable on GitHub.
 
-```bash
-curl -sS http://127.0.0.1:8788/bindings | jq
+Completion comments do not loop into Codex because only comments starting with `/codex` or `/codex-fix` are treated as commands.
+
+## Discord notifications
+
+Discord is optional and is sent by the **control plane**, not by Codex.
+
+Add:
+
+```env
+DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/WEBHOOK_ID/WEBHOOK_TOKEN
 ```
 
-Legacy `.data/bindings.json` entries that used `{ prNumber }` are migrated in memory to the new `{ kind: "pr", number }` format when loaded.
+Treat the URL as a secret.
+
+### Get the webhook URL
+
+In Discord:
+
+1. Open the target channel settings.
+2. **Integrations -> Webhooks**.
+3. Create **New Webhook**.
+4. Select the channel and **Copy Webhook URL**.
+5. Put it in `.env` and restart the control plane.
+
+### Test Discord
+
+```bash
+curl -X POST http://127.0.0.1:8788/notifications/test
+```
+
+Expected:
+
+```json
+{"ok":true,"provider":"discord"}
+```
+
+### Completion notification
+
+Example when Codex reported successfully:
+
+```text
+✅ Codex completed
+my-org/my-repo · PR #269
+Thread: 019...
+Turn: 019...
+GitHub report comment: 123456789
+Report: https://github.com/my-org/my-repo/pull/269#issuecomment-123456789
+Report source: Codex
+```
+
+If the control plane had to create the report:
+
+```text
+Report source: control-plane fallback
+```
+
+Discord failures are logged but do not fail the Codex task. Automatic mentions are disabled.
 
 ## GitHub webhook
 
@@ -299,31 +225,52 @@ Expose only port `8787`:
 cloudflared tunnel --url http://localhost:8787
 ```
 
-GitHub webhook payload URL:
+Payload URL:
 
 ```text
 https://YOUR-TUNNEL.trycloudflare.com/github/webhook
 ```
 
-Select:
+Subscribe to:
 
 - Issue comments
 - Pull request reviews
 - Pull request review comments
 
-A PR comment from an allowlisted user can trigger a fix:
+Example command on a PR:
 
 ```text
 /codex fix the review findings, run tests, and keep the change minimal
+```
+
+## Manual binding
+
+List local bindings:
+
+```bash
+curl -sS http://127.0.0.1:8788/bindings | jq
+```
+
+Bind an existing thread:
+
+```bash
+curl -sS http://127.0.0.1:8788/bindings \
+  -H 'content-type: application/json' \
+  -d '{
+    "repo": "my-org/my-repo",
+    "kind": "pr",
+    "number": 269,
+    "threadId": "019...",
+    "cwd": "/absolute/path/to/my-repo"
+  }' | jq
 ```
 
 ## Security notes
 
 - Always validate `GITHUB_WEBHOOK_SECRET`.
 - Keep repository and sender allowlists narrow.
-- Never expose admin port `8788` through the tunnel.
-- Treat `DISCORD_WEBHOOK_URL` as a secret because it contains the webhook token.
-- Discord notifications disable automatic mentions.
+- Never expose admin port `8788`.
+- Treat `DISCORD_WEBHOOK_URL` as a secret.
 - GitHub binding markers never store local absolute paths.
-- Only binding markers authored by the currently authenticated `gh` user are trusted.
-- Review/fix flows refuse to invent a new conversation when the original thread cannot be recovered.
+- Only binding markers authored by the authenticated `gh` user are trusted.
+- Review/fix flows never invent a new conversation when the original thread cannot be recovered.
