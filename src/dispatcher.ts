@@ -95,6 +95,7 @@ export class ReviewDispatcher {
   }
 
   private async sendIssueTurn(message: DispatchMessage, binding: Binding, prompt: string) {
+    const commitBefore = await this.notifier.snapshotCommit(binding.cwd);
     const turn = await this.codex.send(binding.threadId, prompt, {
       cwd: binding.cwd,
       allowNetwork: this.config.codexAllowNetwork,
@@ -107,6 +108,7 @@ export class ReviewDispatcher {
       action: message.action,
       request: message.text || `/codex:${message.action}`,
       cwd: binding.cwd,
+      commitBefore,
     });
     return turn;
   }
@@ -178,6 +180,7 @@ export class ReviewDispatcher {
         task: request,
       });
       console.log(`[dispatcher] summarize PR ${first.repo}#${first.number} on ${binding.threadId}`);
+      const commitBefore = await this.notifier.snapshotCommit(binding.cwd);
       const turn = await this.codex.send(binding.threadId, prompt, {
         cwd: binding.cwd,
         allowNetwork: this.config.codexAllowNetwork,
@@ -190,6 +193,7 @@ export class ReviewDispatcher {
         action: "summary",
         request: request || "/codex:summary",
         cwd: binding.cwd,
+        commitBefore,
       });
       return turn;
     }
@@ -207,6 +211,7 @@ export class ReviewDispatcher {
       `You are continuing work on GitHub PR ${first.repo}#${first.number} in its existing implementation conversation.`,
       "The trusted user explicitly invoked `/codex:fix-comment`. Only now should review feedback be acted on.",
       ...sections,
+      "If the command itself does not contain a concrete finding, inspect the PR's current review comments/threads and identify the actionable feedback that the command is authorizing you to fix.",
       "Inspect the current working tree first so you do not overwrite unrelated changes. Apply only the relevant fixes and run the most relevant tests/checks.",
       "If the fix changes files, create a real git commit containing the task-related changes and push it to the existing PR branch before reporting completion. Do not create an empty commit when no code change is required.",
       "Do not merge the PR.",
@@ -219,6 +224,7 @@ export class ReviewDispatcher {
     });
 
     console.log(`[dispatcher] fix-comment: forwarding ${messages.length} command(s) to ${binding.threadId}`);
+    const commitBefore = await this.notifier.snapshotCommit(binding.cwd);
     const turn = await this.codex.send(binding.threadId, prompt, {
       cwd: binding.cwd,
       allowNetwork: this.config.codexAllowNetwork,
@@ -231,6 +237,7 @@ export class ReviewDispatcher {
       action: "fix-comment",
       request: messages.map((message) => message.text).filter(Boolean).join(" | ") || "/codex:fix-comment",
       cwd: binding.cwd,
+      commitBefore,
     });
     return turn;
   }
