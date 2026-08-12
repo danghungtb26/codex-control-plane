@@ -1,8 +1,14 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { Config } from "./config.js";
-import type { DispatchMessage } from "./types.js";
+import type { BindingKind, CodexAction, DispatchMessage } from "./types.js";
 
 type GithubPayload = Record<string, any>;
+type WebhookAction = Exclude<CodexAction, "manual">;
+
+type ParsedCommand = {
+  action: WebhookAction;
+  text: string;
+};
 
 export const verifyGithubSignature = (rawBody: Buffer, signature: string | undefined, secret: string) => {
   if (!signature?.startsWith("sha256=")) return false;
@@ -17,6 +23,43 @@ const isAllowed = (config: Config, repo: string, sender: string) =>
 
 const clean = (value: unknown) => (typeof value === "string" ? value.trim() : "");
 
+const parseCommand = (body: string): ParsedCommand | null => {
+  const match = body.match(/^\/codex:(implement|fix-comment|summary|create-pr)(?:\s+([\s\S]*))?$/i);
+  if (!match) return null;
+  return {
+    action: match[1].toLowerCase() as WebhookAction,
+    text: (match[2] ?? "").trim(),
+  };
+};
+
+const isActionAllowed = (action: WebhookAction, targetKind: BindingKind) => {
+  if (action === "implement" || action === "create-pr") return targetKind === "issue";
+  if (action === "fix-comment") return targetKind === "pr";
+  return true;
+};
+
+const buildMessage = (input: {
+  repo: string;
+  targetKind: BindingKind;
+  number: number;
+  sender: string;
+  command: ParsedCommand;
+  url?: string;
+  context?: string;
+}): DispatchMessage | null => {
+  if (!isActionAllowed(input.command.action, input.targetKind)) return null;
+  const text = [input.context, input.command.text].filter(Boolean).join("\n\n");
+  return {
+    repo: input.repo,
+    targetKind: input.targetKind,
+    number: input.number,
+    sender: input.sender,
+    action: input.command.action,
+    text,
+    url: input.url,
+  };
+};
+
 export const parseGithubEvent = (
   event: string,
   payload: GithubPayload,
@@ -28,72 +71,61 @@ export const parseGithubEvent = (
 
   if (event === "pull_request_review" && payload.action === "submitted") {
     const number = Number(payload.pull_request?.number);
-    const state = clean(payload.review?.state).toLowerCase();
     const body = clean(payload.review?.body);
-    if (!Number.isInteger(number)) return null;
-    if (!["changes_requested", "commented"].includes(state)) return null;
-    if (!body && state !== "changes_requested") return null;
-
-    return {
+    const command = parseCommand(body);
+    if (!Number.isInteger(number) || !command) return null;
+    return buildMessage({
       repo,
       targetKind: "pr",
       number,
       sender,
-      kind: "review",
+      command,
       url: clean(payload.review?.html_url),
-      text: [
-        `GitHub review submitted by @${sender}.`,
-        `State: ${state}.`,
-        body ? `Review body:\n${body}` : "Review requested changes but has no summary body; inspect the PR review comments for context if available locally.",
-      ].join("\n\n"),
-    };
+      context: `GitHub PR review command from @${sender}. Review state: ${clean(payload.review?.state) || "unknown"}.`,
+    });
   }
 
-  if (
-    event === "pull_request_review_comment" &&
-    payload.action === "created" &&
-    config.forwardInlineReviewComments
-  ) {
+  if (event === "pull_request_review_comment" && payload.action === "created") {
     const number = Number(payload.pull_request?.number);
     const body = clean(payload.comment?.body);
-    if (!Number.isInteger(number) || !body) return null;
+    const command = parseCommand(body);
+    if (!Number.isInteger(number) || !command) return null;
 
     const path = clean(payload.comment?.path);
     const line = payload.comment?.line ?? payload.comment?.original_line ?? "?";
-    return {
+    return buildMessage({
       repo,
       targetKind: "pr",
       number,
       sender,
-      kind: "inline-review",
+      command,
       url: clean(payload.comment?.html_url),
-      text: [
-        `Inline PR review comment from @${sender}.`,
+      context: [
+        `Inline PR command from @${sender}.`,
         path ? `Location: ${path}:${line}` : "",
-        `Comment:\n${body}`,
+        "Inspect the referenced review thread/comment for the exact requested change.",
       ]
         .filter(Boolean)
-        .join("\n\n"),
-    };
+        .join("\n"),
+    });
   }
 
   if (event === "issue_comment" && payload.action === "created") {
     const number = Number(payload.issue?.number);
     const body = clean(payload.comment?.body);
-    if (!Number.isInteger(number) || !body) return null;
+    const command = parseCommand(body);
+    if (!Number.isInteger(number) || !command) return null;
 
-    const match = body.match(/^\/codex(?:-fix)?\s+([\s\S]+)$/i);
-    if (!match) return null;
-
-    return {
+    const targetKind: BindingKind = payload.issue?.pull_request ? "pr" : "issue";
+    return buildMessage({
       repo,
-      targetKind: payload.issue?.pull_request ? "pr" : "issue",
+      targetKind,
       number,
       sender,
-      kind: "command",
+      command,
       url: clean(payload.comment?.html_url),
-      text: `Direct GitHub command from @${sender}:\n\n${match[1].trim()}`,
-    };
+      context: `Direct GitHub ${targetKind === "pr" ? "PR" : "Issue"} command from @${sender}.`,
+    });
   }
 
   return null;
