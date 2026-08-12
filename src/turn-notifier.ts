@@ -14,6 +14,11 @@ const parseReportReceipt = (text: string): { commentId: string; commentUrl: stri
   return { commentId, commentUrl };
 };
 
+const isInterrupted = (status: string) => {
+  const normalized = status.toLowerCase();
+  return normalized === "interrupted" || normalized === "cancelled";
+};
+
 export class TurnNotifier {
   private contexts = new Map<string, TurnContext>();
 
@@ -66,7 +71,7 @@ export class TurnNotifier {
     this.contexts.delete(event.turnId);
 
     let receipt = await this.resolveCodexReceipt(context, event.finalText);
-    if (!receipt) {
+    if (!receipt && !isInterrupted(event.status)) {
       try {
         receipt = await this.github.postFallbackReport({
           ...context,
