@@ -7,7 +7,7 @@ Local read-only dashboard for Codex Control Plane.
 The built dashboard, dashboard APIs, GitHub webhook and admin APIs share one production origin:
 
 ```text
-http://127.0.0.1:8788/
+http://127.0.0.1:8787/
 ├── /                         dashboard
 ├── /api/*                    dashboard API + SSE
 ├── /github/webhook           GitHub webhook
@@ -20,7 +20,7 @@ http://127.0.0.1:8788/
 Set the canonical port with:
 
 ```env
-PORT=8788
+PORT=8787
 ```
 
 `ADMIN_PORT` and `WEBHOOK_PORT` are legacy fallbacks only when `PORT` is not set.
@@ -36,7 +36,7 @@ bun run start
 Open:
 
 ```text
-http://127.0.0.1:8788/
+http://127.0.0.1:8787/
 ```
 
 ## Development
@@ -52,7 +52,7 @@ bun run dev
 Control plane:
 
 ```text
-http://127.0.0.1:8788
+http://127.0.0.1:8787
 ```
 
 Terminal 2:
@@ -67,14 +67,14 @@ Vite dashboard:
 http://127.0.0.1:5173
 ```
 
-Vite proxies `/api/*` to `http://127.0.0.1:8788`, including the SSE endpoint.
+Vite proxies `/api/*` to `http://127.0.0.1:8787`, including the SSE endpoint.
 
 ## Cloudflare Tunnel and auth
 
 A production/public deployment can still use one tunnel route:
 
 ```text
-codex.example.com -> http://127.0.0.1:8788
+codex.example.com -> http://127.0.0.1:8787
 ```
 
 The GitHub webhook is then:
