@@ -20,12 +20,18 @@ type TurnContext = TurnRegistration;
 const COMMENT_ID_RE = /^GITHUB_REPORT_COMMENT_ID=(\d+)$/m;
 const COMMENT_URL_RE = /^GITHUB_REPORT_COMMENT_URL=(https:\/\/github\.com\/[^\s]+#issuecomment-\d+)$/m;
 const TASK_SUMMARY_RE = /^CODEX_TASK_SUMMARY=(.+)$/m;
+const REPORT_PR_RE = /^GITHUB_REPORT_COMMENT_URL=https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/(\d+)#issuecomment-\d+$/m;
 
 const parseReportReceipt = (text: string): { commentId: string; commentUrl: string } | null => {
   const commentId = text.match(COMMENT_ID_RE)?.[1] ?? "";
   const commentUrl = text.match(COMMENT_URL_RE)?.[1] ?? "";
   if (!commentId && !commentUrl) return null;
   return { commentId, commentUrl };
+};
+
+const reportPrNumber = (text: string) => {
+  const value = Number(text.match(REPORT_PR_RE)?.[1]);
+  return Number.isInteger(value) ? value : undefined;
 };
 
 const isInterrupted = (status: string) => {
@@ -197,6 +203,7 @@ export class TurnNotifier {
         summary,
         commitBefore: context.commitBefore,
         commitAfter,
+        prNumber: reportPrNumber(event.finalText),
       });
     } catch (error) {
       console.error("[dashboard] completion event failed:", (error as Error).message);
