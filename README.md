@@ -21,9 +21,9 @@ Core rules:
 - Codex owns the normal GitHub completion report; the control plane only posts a fallback when no valid receipt is returned.
 - `CODEX_AUTO_APPROVE=true` means `danger-full-access` with no approval prompts.
 
-## Single HTTP origin
+## Production HTTP origin
 
-Everything is served from one port:
+The production runtime serves everything from one port:
 
 ```text
 http://127.0.0.1:8788/
@@ -83,19 +83,37 @@ bun run dashboard:build
 bun run start
 ```
 
-Open only:
+Open:
 
 ```text
 http://127.0.0.1:8788/
 ```
 
-Development is also single-port:
+## Development
+
+Keep the normal Vite development server for HMR.
+
+Terminal 1 — control plane:
 
 ```bash
 bun run dev
 ```
 
-`bun run dev` runs the control plane watcher plus Vite `build --watch`. There is no separate Vite HTTP port; dashboard assets rebuild into `dashboard/dist`, and the control plane continues serving them from `PORT`. Refresh the browser after frontend edits.
+```text
+http://127.0.0.1:8788
+```
+
+Terminal 2 — dashboard:
+
+```bash
+bun run dashboard:dev
+```
+
+```text
+http://127.0.0.1:5173
+```
+
+Vite proxies `/api/*` to `http://127.0.0.1:8788`, including the SSE endpoint. Production remains single-origin; the second port exists only during local frontend development.
 
 ## Dashboard
 
@@ -121,9 +139,9 @@ Dashboard lifecycle/new-turn events are appended to:
 .data/task-events.jsonl
 ```
 
-## Cloudflare Tunnel: one hostname, one service
+## Cloudflare Tunnel
 
-Publish a single hostname to the single local origin:
+A public deployment can use one hostname and one origin service:
 
 ```text
 codex.example.com -> http://127.0.0.1:8788
@@ -135,19 +153,17 @@ The GitHub webhook becomes:
 https://codex.example.com/github/webhook
 ```
 
-No second tunnel or port is required.
+No second production tunnel or port is required.
 
-## Fast auth with Cloudflare Access
+## Cloudflare Access / gateway auth
 
-Recommended setup:
+Cloudflare Access is optional and is not configured by this application.
 
-1. Create a Cloudflare Access self-hosted application for `codex.example.com/*`.
-2. Add an Allow policy for only trusted users. For a personal setup, Cloudflare account membership is the simplest option; email one-time PIN is also easy for a small allowlist.
-3. Create a **more-specific** Access application for `codex.example.com/github/webhook` with a **Bypass** policy so GitHub can post webhooks without an interactive login.
-4. Keep `GITHUB_WEBHOOK_SECRET` configured. `/github/webhook` always verifies GitHub's `X-Hub-Signature-256` HMAC before accepting the payload.
-5. Do not bypass `/`, `/api/*`, `/send`, `/interrupt`, `/tasks`, `/bindings`, or `/notifications/test`.
+This project no longer recommends or requires an Access Bypass policy for `/github/webhook`.
 
-This keeps the UI and all control/admin APIs behind gateway authentication while exposing only the signed GitHub webhook path to machine traffic.
+Important deployment constraint: if Access is placed in front of the **entire** `codex.example.com` hostname, GitHub webhook requests are also subject to Access authentication and normally cannot reach `/github/webhook`. Choose the final gateway/auth ingress layout before enabling hostname-wide Access.
+
+Regardless of gateway choice, `GITHUB_WEBHOOK_SECRET` remains required and `/github/webhook` verifies GitHub's `X-Hub-Signature-256` HMAC before accepting a payload.
 
 ## Manual APIs
 
@@ -204,7 +220,6 @@ Notifications include target Issue/PR, action, task request, thread/turn IDs, co
 - Always validate `GITHUB_WEBHOOK_SECRET`.
 - Keep `GITHUB_ALLOWED_REPOS` and `GITHUB_ALLOWED_SENDERS` narrow.
 - Keep the origin bound to `127.0.0.1`; publish it through Cloudflare Tunnel rather than exposing the local port directly.
-- Put dashboard/admin paths behind Cloudflare Access when publishing the hostname.
-- Scope the Access bypass to `/github/webhook` only.
+- Do not put hostname-wide gateway authentication in front of `/github/webhook` unless the gateway design explicitly supports GitHub's machine-to-machine webhook delivery.
 - Treat `DISCORD_WEBHOOK_URL` as a secret.
 - `CODEX_AUTO_APPROVE=true` grants Codex unsandboxed local filesystem/command/network access.
