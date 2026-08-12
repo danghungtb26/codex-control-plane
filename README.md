@@ -25,7 +25,7 @@ Issue/PR /codex:summary
 
 ## Command protocol
 
-Normal GitHub Issue/PR/review comments do **not** trigger Codex work. A trusted sender must use one of these exact prefixes. Commands are accepted both when a comment/review is first created and when it is later edited. Editing an already command-prefixed comment/review is treated as a new command execution, so use a new edit only when re-running the command is intentional.
+Normal GitHub Issue/PR/review comments do **not** trigger Codex work. A trusted sender must use one of these exact prefixes:
 
 ### `/codex:implement`
 
