@@ -68,6 +68,7 @@ WEBHOOK_PORT=8787
 ADMIN_PORT=8788
 CODEX_BIN=codex
 CODEX_ALLOW_NETWORK=true
+CODEX_AUTO_APPROVE=true
 REVIEW_DEBOUNCE_MS=1200
 FORWARD_INLINE_REVIEW_COMMENTS=true
 
@@ -78,6 +79,18 @@ DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...
 `GH_BIN` and `REPO_WORKSPACES` are optional advanced/recovery overrides and are not required for the normal local flow.
 
 `CODEX_ALLOW_NETWORK=true` is required when Codex itself must push, create/update PRs, or post its GitHub completion report. The control plane's binding registry and fallback reporter use local authenticated `gh api` independently.
+
+### Codex approvals
+
+`CODEX_AUTO_APPROVE=true` is the default. The control plane runs Codex with on-request approvals and `auto_review`, and automatically accepts any command/file approval request still surfaced by App Server. This allows normal Git operations such as creating branches and commits while keeping the thread in `workspace-write` sandbox mode.
+
+Set:
+
+```env
+CODEX_AUTO_APPROVE=false
+```
+
+to restore the previous deny-all behavior (`approvalPolicy: never` and surfaced approval requests declined).
 
 ## Run
 
@@ -308,6 +321,7 @@ curl -sS http://127.0.0.1:8788/bindings \
 - Keep repository and sender allowlists narrow.
 - Never expose admin port `8788`.
 - Treat `DISCORD_WEBHOOK_URL` as a secret.
+- `CODEX_AUTO_APPROVE=true` allows Codex to approve requested command/file escalations automatically; use it only for trusted allowlisted repositories and senders.
 - GitHub binding markers never store local absolute paths.
 - Only binding markers authored by the authenticated `gh` user are trusted.
 - Review/fix flows never invent a new conversation when the original thread cannot be recovered.
