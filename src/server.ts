@@ -1,9 +1,11 @@
 import { createServer } from "node:http";
 import { BindingResolver } from "./binding-resolver.js";
 import { BindingStore } from "./binding-store.js";
-import { CodexAppServerClient } from "./codex-client.js";
+import { CodexAppServerClient, type CodexNotificationEvent } from "./codex-client.js";
 import { withGithubCompletionComment, withGithubIssueImplementation } from "./codex-prompt.js";
 import { loadConfig } from "./config.js";
+import { DashboardHttp } from "./dashboard-http.js";
+import { DashboardStore } from "./dashboard-store.js";
 import { DiscordNotifier } from "./discord-notifier.js";
 import { ReviewDispatcher } from "./dispatcher.js";
 import { GithubBindingRegistry } from "./github-binding-registry.js";
@@ -14,6 +16,8 @@ import { TurnNotifier } from "./turn-notifier.js";
 const config = loadConfig();
 const store = new BindingStore();
 await store.load();
+const dashboard = new DashboardStore();
+await dashboard.load();
 
 const githubBindings = new GithubBindingRegistry(config.ghBin);
 const resolver = new BindingResolver(store, githubBindings, config);
@@ -23,7 +27,11 @@ const codex = new CodexAppServerClient(
   config.codexAutoApprove,
 );
 const discord = new DiscordNotifier(config.discordWebhookUrl);
-const turnNotifier = new TurnNotifier(codex, githubBindings, discord);
+const turnNotifier = new TurnNotifier(codex, githubBindings, discord, dashboard);
+const dashboardHttp = new DashboardHttp(dashboard, store);
+codex.on("notification", (event: CodexNotificationEvent) => {
+  dashboard.recordCodexNotification(event);
+});
 await codex.start();
 
 const dispatcher = new ReviewDispatcher(resolver, codex, turnNotifier, config);
@@ -109,6 +117,8 @@ const webhookServer = createServer(async (req, res) => {
 
 const adminServer = createServer(async (req, res) => {
   try {
+    if (await dashboardHttp.handle(req, res)) return;
+
     if (req.method === "GET" && req.url === "/bindings") {
       return sendJson(res, 200, store.list());
     }
@@ -322,6 +332,7 @@ webhookServer.listen(config.webhookPort, "127.0.0.1", () => {
 });
 adminServer.listen(config.adminPort, "127.0.0.1", () => {
   console.log(`[bridge] local admin API: http://127.0.0.1:${config.adminPort}`);
+  console.log(`[bridge] dashboard: http://127.0.0.1:${config.adminPort}/`);
   console.log(`[bridge] Discord notifications: ${discord.enabled ? "enabled" : "disabled"}`);
 });
 
