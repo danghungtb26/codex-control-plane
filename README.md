@@ -48,15 +48,7 @@ bun install
 cp .env.example .env
 ```
 
-`bun install` creates/updates the Bun lockfile for the checkout. Use Bun for dependency changes as well (`bun add`, `bun remove`, `bun update`).
-
-Bun automatically loads `.env`, so the project does not use a custom dotenv loader.
-
-Generate the GitHub webhook secret:
-
-```bash
-openssl rand -hex 32
-```
+Bun automatically loads `.env`.
 
 Minimal `.env`:
 
@@ -67,8 +59,8 @@ GITHUB_ALLOWED_SENDERS=my-login
 WEBHOOK_PORT=8787
 ADMIN_PORT=8788
 CODEX_BIN=codex
-CODEX_ALLOW_NETWORK=true
 CODEX_AUTO_APPROVE=true
+CODEX_ALLOW_NETWORK=false
 REVIEW_DEBOUNCE_MS=1200
 FORWARD_INLINE_REVIEW_COMMENTS=true
 
@@ -76,13 +68,19 @@ FORWARD_INLINE_REVIEW_COMMENTS=true
 DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...
 ```
 
-`GH_BIN` and `REPO_WORKSPACES` are optional advanced/recovery overrides and are not required for the normal local flow.
+### Codex access mode
 
-`CODEX_ALLOW_NETWORK=true` is required when Codex itself must push, create/update PRs, or post its GitHub completion report. The control plane's binding registry and fallback reporter use local authenticated `gh api` independently.
+`CODEX_AUTO_APPROVE=true` means **full access**:
 
-### Codex approvals
+```text
+approvalPolicy = never
+thread sandbox = danger-full-access
+turn sandboxPolicy = dangerFullAccess
+```
 
-`CODEX_AUTO_APPROVE=true` is the default. The control plane runs Codex with on-request approvals and `auto_review`, and automatically accepts any command/file approval request still surfaced by App Server. This allows normal Git operations such as creating branches and commits while keeping the thread in `workspace-write` sandbox mode.
+In this mode Codex can create/switch branches, commit, modify `.git`, write outside the workspace, execute commands, and access the network without approval prompts. `CODEX_ALLOW_NETWORK` is ignored in this mode.
+
+Use full access only with narrow `GITHUB_ALLOWED_REPOS` and `GITHUB_ALLOWED_SENDERS` values because a trusted GitHub command can trigger local code execution.
 
 Set:
 
@@ -90,36 +88,24 @@ Set:
 CODEX_AUTO_APPROVE=false
 ```
 
-to restore the previous deny-all behavior (`approvalPolicy: never` and surfaced approval requests declined).
+to restore the restricted mode:
+
+```text
+approvalPolicy = never
+sandbox = workspace-write
+```
+
+In restricted mode, `CODEX_ALLOW_NETWORK` controls network access and approval requests are declined.
+
+`GH_BIN` and `REPO_WORKSPACES` are optional advanced/recovery overrides.
 
 ## Run
 
-Development with Bun watch mode:
-
-```bash
-bun run dev
-```
-
-Normal start:
-
-```bash
-bun run start
-```
-
-Typecheck:
-
 ```bash
 bun run typecheck
-```
-
-The scripts are Bun-native:
-
-```json
-{
-  "dev": "bun --watch src/server.ts",
-  "start": "bun src/server.ts",
-  "typecheck": "tsc --noEmit"
-}
+bun run dev
+# or
+bun run start
 ```
 
 ## Start a new implementation task
@@ -137,9 +123,13 @@ curl -sS http://127.0.0.1:8788/tasks \
   }' | jq
 ```
 
-The control plane creates a new thread and persists the Issue binding. Codex is instructed to create/update a PR containing `Closes #245`, allowing that PR to inherit the same thread later.
+You can also start work directly from a normal GitHub Issue comment:
 
-Calling `/tasks` again for an already-bound Issue returns `409` unless `forceNewThread=true` is intentionally supplied.
+```text
+/codex Start working on this issue. Implement the requirements and acceptance criteria described in the issue, run the focused tests and full test suite, and report back with the resulting PR/commit and any important notes.
+```
+
+The first Issue command creates a durable thread. Later `/codex` commands on the same Issue resume that thread.
 
 ## Fix/review an existing PR
 
@@ -164,108 +154,32 @@ If the original thread cannot be recovered, no new fix thread is created.
 
 ## GitHub completion report contract
 
-Every PR-bound turn requires Codex to post exactly one completion comment with:
+Every PR-bound turn requires Codex to post exactly one completion comment with completed/blocked status, summary, files changed, tests/checks and results, and remaining follow-up/blockers.
 
-- completed/blocked status;
-- concise summary;
-- files changed;
-- tests/checks and results;
-- remaining follow-up/blockers.
-
-After posting, the **final Codex reply** must include the real GitHub receipt:
+After posting, the final Codex reply must include the real GitHub receipt:
 
 ```text
 GITHUB_REPORT_COMMENT_ID=123456789
 GITHUB_REPORT_COMMENT_URL=https://github.com/my-org/my-repo/pull/269#issuecomment-123456789
 ```
 
-Codex must obtain these values from GitHub and must never invent them.
-
-The control plane accepts either ID or URL:
-
-- if an ID is present, it calls `gh api repos/<repo>/issues/comments/<id>` and resolves the authoritative `html_url`;
-- if only a URL is present, it extracts the comment ID when possible and verifies it through GitHub;
-- if no valid receipt can be resolved, the fallback reporter runs.
-
-### Fallback behavior
-
-On `turn/completed`, the control plane captures the final Codex agent reply.
-
-**Receipt found:**
-
-```text
-Codex report -> keep it
-control-plane -> no duplicate comment
-Discord -> Codex report comment id/link
-```
-
-**Receipt missing/invalid:**
-
-```text
-control-plane -> post fallback completion report
-GitHub API -> returns real comment id + html_url
-Discord -> fallback report comment id/link
-```
-
-The fallback body includes the Codex final result, turn status, thread ID and turn ID. For PR turns it is posted to the PR conversation. For an Issue implementation turn that never produced a PR receipt, it is posted to the Issue so the result is still durable on GitHub.
-
-Completion comments do not loop into Codex because only comments starting with `/codex` or `/codex-fix` are treated as commands.
+The control plane validates the receipt. If no valid receipt can be resolved, it posts a fallback completion report using the final Codex result.
 
 ## Discord notifications
 
-Discord is optional and is sent by the **control plane**, not by Codex.
-
-Add:
+Discord is optional and is sent by the control plane, not by Codex.
 
 ```env
 DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/WEBHOOK_ID/WEBHOOK_TOKEN
 ```
 
-Treat the URL as a secret.
-
-### Get the webhook URL
-
-In Discord:
-
-1. Open the target channel settings.
-2. **Integrations -> Webhooks**.
-3. Create **New Webhook**.
-4. Select the channel and **Copy Webhook URL**.
-5. Put it in `.env` and restart the control plane.
-
-### Test Discord
+Test:
 
 ```bash
 curl -X POST http://127.0.0.1:8788/notifications/test
 ```
 
-Expected:
-
-```json
-{"ok":true,"provider":"discord"}
-```
-
-### Completion notification
-
-Example when Codex reported successfully:
-
-```text
-✅ Codex completed
-my-org/my-repo · PR #269
-Thread: 019...
-Turn: 019...
-GitHub report comment: 123456789
-Report: https://github.com/my-org/my-repo/pull/269#issuecomment-123456789
-Report source: Codex
-```
-
-If the control plane had to create the report:
-
-```text
-Report source: control-plane fallback
-```
-
-Discord failures are logged but do not fail the Codex task. Automatic mentions are disabled.
+Completion notifications include repo, Issue/PR, thread, turn, GitHub report comment id/link, and whether the report came from Codex or the fallback reporter.
 
 ## GitHub webhook
 
@@ -287,12 +201,6 @@ Subscribe to:
 - Pull request reviews
 - Pull request review comments
 
-Example command on a PR:
-
-```text
-/codex fix the review findings, run tests, and keep the change minimal
-```
-
 ## Manual binding
 
 List local bindings:
@@ -301,27 +209,13 @@ List local bindings:
 curl -sS http://127.0.0.1:8788/bindings | jq
 ```
 
-Bind an existing thread:
-
-```bash
-curl -sS http://127.0.0.1:8788/bindings \
-  -H 'content-type: application/json' \
-  -d '{
-    "repo": "my-org/my-repo",
-    "kind": "pr",
-    "number": 269,
-    "threadId": "019...",
-    "cwd": "/absolute/path/to/my-repo"
-  }' | jq
-```
-
 ## Security notes
 
 - Always validate `GITHUB_WEBHOOK_SECRET`.
 - Keep repository and sender allowlists narrow.
 - Never expose admin port `8788`.
 - Treat `DISCORD_WEBHOOK_URL` as a secret.
-- `CODEX_AUTO_APPROVE=true` allows Codex to approve requested command/file escalations automatically; use it only for trusted allowlisted repositories and senders.
+- `CODEX_AUTO_APPROVE=true` grants Codex unsandboxed local command/filesystem/network access.
 - GitHub binding markers never store local absolute paths.
 - Only binding markers authored by the authenticated `gh` user are trusted.
 - Review/fix flows never invent a new conversation when the original thread cannot be recovered.
