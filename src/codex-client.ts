@@ -192,7 +192,6 @@ export class CodexAppServerClient extends EventEmitter {
     const activeTurnId = this.activeTurns.get(threadId);
     if (activeTurnId) {
       try {
-        console.log(`[codex] steering ${threadId} / ${activeTurnId}`);
         return await this.steer(threadId, message);
       } catch (error) {
         console.warn("[codex] steer failed; retrying as a new turn:", (error as Error).message);
@@ -200,7 +199,6 @@ export class CodexAppServerClient extends EventEmitter {
       }
     }
 
-    console.log(`[codex] starting new turn on ${threadId}`);
     return this.startTurn(threadId, message, options);
   }
 
@@ -305,7 +303,6 @@ export class CodexAppServerClient extends EventEmitter {
         this.turnThreads.delete(turnId);
         this.finalAgentMessages.delete(turnId);
       }
-      console.log(`[codex] turn completed ${turnId}: ${status}`);
       this.emit("turnCompleted", {
         threadId,
         turnId,
@@ -313,12 +310,6 @@ export class CodexAppServerClient extends EventEmitter {
         finalText,
         raw: params,
       } satisfies TurnCompletedEvent);
-      return;
-    }
-
-    if (method === "item/agentMessage/delta") {
-      const delta = typeof params.delta === "string" ? params.delta : "";
-      if (delta) process.stdout.write(delta);
       return;
     }
 
