@@ -22,8 +22,6 @@ const isAllowed = (config: Config, repo: string, sender: string) =>
   config.allowedRepos.has(repo.toLowerCase()) && config.allowedSenders.has(sender.toLowerCase());
 
 const clean = (value: unknown) => (typeof value === "string" ? value.trim() : "");
-const isCreatedOrEdited = (action: unknown) => action === "created" || action === "edited";
-const isSubmittedOrEdited = (action: unknown) => action === "submitted" || action === "edited";
 
 const parseCommand = (body: string): ParsedCommand | null => {
   const match = body.match(/^\/codex:(implement|fix-comment|summary|create-pr)(?:\s+([\s\S]*))?$/i);
@@ -71,7 +69,7 @@ export const parseGithubEvent = (
   const sender = clean(payload.sender?.login);
   if (!repo || !sender || !isAllowed(config, repo, sender)) return null;
 
-  if (event === "pull_request_review" && isSubmittedOrEdited(payload.action)) {
+  if (event === "pull_request_review" && payload.action === "submitted") {
     const number = Number(payload.pull_request?.number);
     const body = clean(payload.review?.body);
     const command = parseCommand(body);
@@ -87,7 +85,7 @@ export const parseGithubEvent = (
     });
   }
 
-  if (event === "pull_request_review_comment" && isCreatedOrEdited(payload.action)) {
+  if (event === "pull_request_review_comment" && payload.action === "created") {
     const number = Number(payload.pull_request?.number);
     const body = clean(payload.comment?.body);
     const command = parseCommand(body);
@@ -112,7 +110,7 @@ export const parseGithubEvent = (
     });
   }
 
-  if (event === "issue_comment" && isCreatedOrEdited(payload.action)) {
+  if (event === "issue_comment" && payload.action === "created") {
     const number = Number(payload.issue?.number);
     const body = clean(payload.comment?.body);
     const command = parseCommand(body);
