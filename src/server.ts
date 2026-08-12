@@ -190,6 +190,7 @@ const adminServer = createServer(async (req, res) => {
           Boolean(body.forceNewThread),
         );
         const prompt = withGithubIssueImplementation({ repo, issueNumber, task: message });
+        const commitBefore = await turnNotifier.snapshotCommit(cwd);
         const turn = await codex.startTurn(threadId, prompt, {
           cwd,
           allowNetwork: config.codexAllowNetwork,
@@ -202,6 +203,7 @@ const adminServer = createServer(async (req, res) => {
           action: "implement",
           request: message,
           cwd,
+          commitBefore,
         });
         return sendJson(res, 201, { binding, turn });
       }
@@ -216,6 +218,7 @@ const adminServer = createServer(async (req, res) => {
         prNumber: legacyPrNumber,
         task: message,
       });
+      const commitBefore = await turnNotifier.snapshotCommit(cwd);
       const turn = await codex.startTurn(threadId, prompt, {
         cwd,
         allowNetwork: config.codexAllowNetwork,
@@ -228,6 +231,7 @@ const adminServer = createServer(async (req, res) => {
         action: "manual",
         request: message,
         cwd,
+        commitBefore,
       });
       return sendJson(res, 201, { binding, turn, legacyMode: true });
     }
@@ -258,6 +262,7 @@ const adminServer = createServer(async (req, res) => {
           });
         }
 
+        const commitBefore = await turnNotifier.snapshotCommit(binding.cwd);
         const turn = await codex.send(binding.threadId, message, {
           cwd: binding.cwd,
           allowNetwork: config.codexAllowNetwork,
@@ -270,6 +275,7 @@ const adminServer = createServer(async (req, res) => {
           action: "manual",
           request: message,
           cwd: binding.cwd,
+          commitBefore,
         });
         return sendJson(res, 202, { binding, turn });
       }
@@ -282,6 +288,7 @@ const adminServer = createServer(async (req, res) => {
       }
 
       const prompt = withGithubCompletionComment({ repo, prNumber, task: message });
+      const commitBefore = await turnNotifier.snapshotCommit(binding.cwd);
       const turn = await codex.send(binding.threadId, prompt, {
         cwd: binding.cwd,
         allowNetwork: config.codexAllowNetwork,
@@ -294,6 +301,7 @@ const adminServer = createServer(async (req, res) => {
         action: "manual",
         request: message,
         cwd: binding.cwd,
+        commitBefore,
       });
       return sendJson(res, 202, { binding, turn });
     }
