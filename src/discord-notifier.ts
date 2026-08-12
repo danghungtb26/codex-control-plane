@@ -9,6 +9,15 @@ export type DiscordNotificationTarget = {
   request?: string;
 };
 
+type DiscordStartedInput = DiscordNotificationTarget & {
+  commitBefore?: string;
+};
+
+type DiscordFailureInput = DiscordNotificationTarget & {
+  error: string;
+  commitBefore?: string;
+};
+
 type DiscordCompletionInput = DiscordNotificationTarget & {
   turnId: string;
   status: string;
@@ -36,6 +45,12 @@ const compact = (value: string | undefined, maxLength: number) => {
 
 const shortSha = (value: string | undefined) => (value ? value.slice(0, 12) : "unknown");
 
+const targetDetails = (input: DiscordNotificationTarget) => {
+  const label = input.kind === "pr" ? `PR #${input.number}` : `Issue #${input.number}`;
+  const githubUrl = `https://github.com/${input.repo}/${input.kind === "pr" ? "pull" : "issues"}/${input.number}`;
+  return { label, githubUrl };
+};
+
 export class DiscordNotifier {
   constructor(private readonly webhookUrl?: string) {}
 
@@ -43,11 +58,71 @@ export class DiscordNotifier {
     return Boolean(this.webhookUrl);
   }
 
+  private async post(content: string) {
+    if (!this.webhookUrl) return false;
+
+    const response = await fetch(this.webhookUrl, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        content,
+        allowed_mentions: { parse: [] },
+      }),
+    });
+
+    if (!response.ok) {
+      const detail = await response.text().catch(() => "");
+      throw new Error(
+        `Discord webhook failed: ${response.status} ${response.statusText}${detail ? ` - ${detail}` : ""}`,
+      );
+    }
+
+    return true;
+  }
+
+  async sendStarted(input: DiscordStartedInput) {
+    if (!this.webhookUrl) return false;
+
+    const { label, githubUrl } = targetDetails(input);
+    const content = [
+      "🚀 **Codex task started**",
+      `**${input.repo} · ${label}**`,
+      `Action: \`${input.action}\``,
+      input.request ? `Task: ${compact(input.request, 500)}` : "",
+      `Commit before: \`${shortSha(input.commitBefore)}\``,
+      `Thread: \`${input.threadId}\``,
+      githubUrl,
+    ]
+      .filter(Boolean)
+      .join("\n");
+
+    return this.post(content);
+  }
+
+  async sendFailure(input: DiscordFailureInput) {
+    if (!this.webhookUrl) return false;
+
+    const { label, githubUrl } = targetDetails(input);
+    const content = [
+      "❌ **Codex task failed before completion**",
+      `**${input.repo} · ${label}**`,
+      `Action: \`${input.action}\``,
+      input.request ? `Task: ${compact(input.request, 400)}` : "",
+      `Error: ${compact(input.error, 700)}`,
+      `Commit: \`${shortSha(input.commitBefore)}\``,
+      `Thread: \`${input.threadId}\``,
+      githubUrl,
+    ]
+      .filter(Boolean)
+      .join("\n");
+
+    return this.post(content);
+  }
+
   async sendCompletion(input: DiscordCompletionInput) {
     if (!this.webhookUrl) return false;
 
-    const label = input.kind === "pr" ? `PR #${input.number}` : `Issue #${input.number}`;
-    const githubUrl = `https://github.com/${input.repo}/${input.kind === "pr" ? "pull" : "issues"}/${input.number}`;
+    const { label, githubUrl } = targetDetails(input);
     const before = shortSha(input.commitBefore);
     const after = shortSha(input.commitAfter);
     const commitLine = before === after ? `Commit: \`${after}\` (unchanged)` : `Commit: \`${before}\` → \`${after}\``;
@@ -75,42 +150,11 @@ export class DiscordNotifier {
       .filter(Boolean)
       .join("\n");
 
-    const response = await fetch(this.webhookUrl, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        content,
-        allowed_mentions: { parse: [] },
-      }),
-    });
-
-    if (!response.ok) {
-      const detail = await response.text().catch(() => "");
-      throw new Error(
-        `Discord webhook failed: ${response.status} ${response.statusText}${detail ? ` - ${detail}` : ""}`,
-      );
-    }
-
-    return true;
+    return this.post(content);
   }
 
   async sendTest() {
     if (!this.webhookUrl) throw new Error("DISCORD_WEBHOOK_URL is not configured");
-
-    const response = await fetch(this.webhookUrl, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        content: "✅ **Codex Control Plane** Discord notifications are configured correctly.",
-        allowed_mentions: { parse: [] },
-      }),
-    });
-
-    if (!response.ok) {
-      const detail = await response.text().catch(() => "");
-      throw new Error(
-        `Discord webhook failed: ${response.status} ${response.statusText}${detail ? ` - ${detail}` : ""}`,
-      );
-    }
+    return this.post("✅ **Codex Control Plane** Discord notifications are configured correctly.");
   }
 }
