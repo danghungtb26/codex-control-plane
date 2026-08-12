@@ -2,6 +2,7 @@ import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { BindingStore } from "./binding-store.js";
+import type { CodexAppServerClient } from "./codex-client.js";
 import type { DashboardStore } from "./dashboard-store.js";
 import { sendJson } from "./http-utils.js";
 
@@ -18,12 +19,21 @@ const MIME_TYPES: Record<string, string> = {
 
 const contentTypeFor = (filePath: string) => MIME_TYPES[path.extname(filePath)] ?? "application/octet-stream";
 
+const withTimeout = <T>(promise: Promise<T>, milliseconds: number) =>
+  Promise.race([
+    promise,
+    new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error(`Codex history read timed out after ${milliseconds}ms`)), milliseconds);
+    }),
+  ]);
+
 export class DashboardHttp {
   private readonly distPath = path.resolve("dashboard/dist");
 
   constructor(
     private readonly dashboard: DashboardStore,
     private readonly bindings: BindingStore,
+    private readonly codex: CodexAppServerClient,
   ) {}
 
   async handle(req: IncomingMessage, res: ServerResponse) {
@@ -37,7 +47,13 @@ export class DashboardHttp {
     const eventsMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/events$/);
     if (req.method === "GET" && eventsMatch) {
       const threadId = decodeURIComponent(eventsMatch[1]);
-      sendJson(res, 200, this.dashboard.getEvents(threadId));
+      let thread: Record<string, any> | null = null;
+      try {
+        thread = await withTimeout(this.codex.readThread(threadId, true), 5000);
+      } catch (error) {
+        console.warn(`[dashboard] history unavailable for ${threadId}:`, (error as Error).message);
+      }
+      sendJson(res, 200, this.dashboard.mergeThreadHistory(threadId, thread));
       return true;
     }
 
