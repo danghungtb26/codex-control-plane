@@ -228,11 +228,41 @@ const adminServer = createServer(async (req, res) => {
 
     if (req.method === "POST" && req.url === "/send") {
       const body = JSON.parse((await readBody(req)).toString("utf8"));
-      const repo = String(body.repo ?? "");
+      const repo = String(body.repo ?? "").trim();
+      const issueNumber = Number(body.issueNumber);
       const prNumber = Number(body.prNumber);
-      const message = String(body.message ?? "");
-      if (!repo || !Number.isInteger(prNumber) || !message) {
-        return sendJson(res, 400, { error: "repo, prNumber and message are required" });
+      const message = String(body.message ?? "").trim();
+      const hasIssue = Number.isInteger(issueNumber);
+      const hasPr = Number.isInteger(prNumber);
+
+      if (!repo || !message || hasIssue === hasPr) {
+        return sendJson(res, 400, {
+          error: "repo, message and exactly one of issueNumber or prNumber are required",
+        });
+      }
+      if (!config.allowedRepos.has(repo.toLowerCase())) {
+        return sendJson(res, 403, { error: `repo ${repo} is not in GITHUB_ALLOWED_REPOS` });
+      }
+
+      if (hasIssue) {
+        const binding = await resolver.resolveIssue(repo, issueNumber);
+        if (!binding) {
+          return sendJson(res, 404, {
+            error: `no existing Codex thread found for issue #${issueNumber}; use /tasks or /codex on the Issue to create one first`,
+          });
+        }
+
+        const turn = await codex.send(binding.threadId, message, {
+          cwd: binding.cwd,
+          allowNetwork: config.codexAllowNetwork,
+        });
+        turnNotifier.register(turn.turnId, {
+          repo,
+          kind: "issue",
+          number: issueNumber,
+          threadId: binding.threadId,
+        });
+        return sendJson(res, 202, { binding, turn });
       }
 
       const binding = await resolver.resolvePr(repo, prNumber);
