@@ -1,35 +1,21 @@
 services:
-  control-plane:
+  dashboard:
     build:
       context: .
-      args:
-        CODEX_VERSION: ${CODEX_VERSION:-latest}
-    env_file:
-      - .env
     environment:
-      PORT: ${PORT:-8787}
+      CORE_URL: ${CORE_URL:-http://host.docker.internal:8787}
       CADDY_AUTH_USERNAME: ${CADDY_AUTH_USERNAME:-admin}
       CADDY_AUTH_PASSWORD: ${CADDY_AUTH_PASSWORD:-}
       CADDY_AUTH_PASSWORD_HASH: ${CADDY_AUTH_PASSWORD_HASH:-}
-    volumes:
-      - ./.data:/app/.data
-      - "${WORKSPACES_DIR:?WORKSPACES_DIR must be set}:${WORKSPACES_DIR:?WORKSPACES_DIR must be set}"
-      - "${HOME}/.codex:/root/.codex"
-      - "${HOME}/.config/gh:/root/.config/gh:ro"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "127.0.0.1:${CADDY_PORT:-8080}:8080"
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:${PORT:-8787}/health || exit 1"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-      start_period: 10s
 
   cloudflared:
     image: cloudflare/cloudflared:latest
-    command: tunnel --no-autoupdate --url http://control-plane:8080
+    command: tunnel --no-autoupdate --url http://dashboard:8080
     depends_on:
-      control-plane:
-        condition: service_healthy
+      - dashboard
     restart: unless-stopped
