@@ -83,7 +83,9 @@ The GitHub webhook is then:
 https://codex.example.com/github/webhook
 ```
 
-This project does not prescribe a Cloudflare Access Bypass policy. If Cloudflare Access is applied to the entire hostname, GitHub webhook requests will also be challenged by Access and will not reach the origin normally. Keep gateway authentication as a deployment concern until the desired webhook/auth ingress layout is chosen.
+Cloudflare Access is optional. Its Free Zero Trust plan currently supports small teams under 50 users, but this project does not prescribe an Access Bypass policy.
+
+If Access is applied to the entire hostname, GitHub webhook requests will also be challenged by Access and normally will not reach the origin. Keep gateway authentication as a deployment concern until the desired webhook/auth ingress layout is chosen.
 
 `GITHUB_WEBHOOK_SECRET` remains mandatory and the control plane validates `X-Hub-Signature-256` on every GitHub webhook request.
 
