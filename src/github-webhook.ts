@@ -10,6 +10,13 @@ type ParsedCommand = {
   text: string;
 };
 
+export type GithubPullRequestOpened = {
+  repo: string;
+  number: number;
+  sender: string;
+  url: string;
+};
+
 export const verifyGithubSignature = (rawBody: Buffer, signature: string | undefined, secret: string) => {
   if (!signature?.startsWith("sha256=")) return false;
   const expected = `sha256=${createHmac("sha256", secret).update(rawBody).digest("hex")}`;
@@ -58,6 +65,22 @@ const buildMessage = (input: {
     text,
     url: input.url,
   };
+};
+
+export const parseGithubPullRequestOpened = (
+  event: string,
+  payload: GithubPayload,
+  config: Config,
+): GithubPullRequestOpened | null => {
+  if (event !== "pull_request" || payload.action !== "opened") return null;
+
+  const repo = clean(payload.repository?.full_name);
+  const sender = clean(payload.sender?.login);
+  const number = Number(payload.pull_request?.number);
+  const url = clean(payload.pull_request?.html_url);
+  if (!repo || !sender || !Number.isInteger(number) || number <= 0 || !url) return null;
+  if (!isAllowed(config, repo, sender)) return null;
+  return { repo, number, sender, url };
 };
 
 export const parseGithubEvent = (
