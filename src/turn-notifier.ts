@@ -17,9 +17,16 @@ type TurnRegistration = TurnRunContext & {
 
 type TurnContext = TurnRegistration;
 
+type GithubPrTarget = {
+  number: number;
+  url: string;
+};
+
 const COMMENT_ID_RE = /^GITHUB_REPORT_COMMENT_ID=(\d+)$/m;
 const COMMENT_URL_RE = /^GITHUB_REPORT_COMMENT_URL=(https:\/\/github\.com\/[^\s]+#issuecomment-\d+)$/m;
 const TASK_SUMMARY_RE = /^CODEX_TASK_SUMMARY=(.+)$/m;
+const PR_NUMBER_RE = /^GITHUB_PR_NUMBER=(\d+)$/m;
+const PR_URL_RE = /^GITHUB_PR_URL=https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/(\d+)$/m;
 const REPORT_PR_RE = /^GITHUB_REPORT_COMMENT_URL=https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/(\d+)#issuecomment-\d+$/m;
 
 const parseReportReceipt = (text: string): { commentId: string; commentUrl: string } | null => {
@@ -31,8 +38,28 @@ const parseReportReceipt = (text: string): { commentId: string; commentUrl: stri
 
 const reportPrNumber = (text: string) => {
   const value = Number(text.match(REPORT_PR_RE)?.[1]);
-  return Number.isInteger(value) ? value : undefined;
+  return Number.isInteger(value) && value > 0 ? value : undefined;
 };
+
+const prTargetFrom = (finalText: string, context: TurnContext): GithubPrTarget | null => {
+  if (context.kind !== "issue" || (context.action !== "implement" && context.action !== "create-pr")) {
+    return null;
+  }
+
+  const fromReport = reportPrNumber(finalText);
+  const fromUrl = Number(finalText.match(PR_URL_RE)?.[1]);
+  const fromNumber = Number(finalText.match(PR_NUMBER_RE)?.[1]);
+  const number =
+    fromReport ??
+    (Number.isInteger(fromUrl) && fromUrl > 0 ? fromUrl : undefined) ??
+    (Number.isInteger(fromNumber) && fromNumber > 0 ? fromNumber : undefined);
+
+  if (!number) return null;
+  return { number, url: `https://github.com/${context.repo}/pull/${number}` };
+};
+
+const receiptMatchesPr = (receipt: GithubReportReceipt, target: GithubPrTarget) =>
+  receipt.commentUrl.startsWith(`${target.url}#issuecomment-`);
 
 const isInterrupted = (status: string) => {
   const normalized = status.toLowerCase();
@@ -58,6 +85,8 @@ const summaryFrom = (finalText: string, context: TurnContext, status: string) =>
       (line) =>
         !line.startsWith("GITHUB_REPORT_COMMENT_ID=") &&
         !line.startsWith("GITHUB_REPORT_COMMENT_URL=") &&
+        !line.startsWith("GITHUB_PR_NUMBER=") &&
+        !line.startsWith("GITHUB_PR_URL=") &&
         !line.startsWith("CODEX_TASK_SUMMARY="),
     )
     .join(" ")
@@ -201,6 +230,7 @@ export class TurnNotifier {
 
     const commitAfter = await readGitHead(context.cwd);
     const summary = summaryFrom(event.finalText, context, event.status);
+    const prTarget = prTargetFrom(event.finalText, context);
 
     console.log(
       `[task] end status=${event.status} ${taskLabel(context)} turn=${event.turnId} commit=${context.commitBefore || "-"}->${commitAfter || "-"}`,
@@ -214,19 +244,26 @@ export class TurnNotifier {
         summary,
         commitBefore: context.commitBefore,
         commitAfter,
-        prNumber: reportPrNumber(event.finalText),
+        prNumber: prTarget?.number ?? reportPrNumber(event.finalText),
       });
     } catch (error) {
       console.error("[dashboard] completion event failed:", (error as Error).message);
     }
 
     let receipt = await this.resolveCodexReceipt(context, event.finalText);
+    if (receipt && prTarget && !receiptMatchesPr(receipt, prTarget)) {
+      console.warn(
+        `[github] completion receipt targeted a non-PR comment for ${context.repo} issue #${context.number}; expecting PR #${prTarget.number}, posting fallback there instead`,
+      );
+      receipt = null;
+    }
+
     if (!receipt && !isInterrupted(event.status)) {
       try {
         receipt = await this.github.postFallbackReport({
           repo: context.repo,
-          kind: context.kind,
-          number: context.number,
+          kind: prTarget ? "pr" : context.kind,
+          number: prTarget?.number ?? context.number,
           threadId: context.threadId,
           status: event.status,
           finalText: event.finalText,
@@ -254,6 +291,8 @@ export class TurnNotifier {
         reportCommentId: receipt?.commentId,
         reportCommentUrl: receipt?.commentUrl,
         reportFallback: receipt?.fallback,
+        prNumber: prTarget?.number,
+        prUrl: prTarget?.url,
       });
     } catch (error) {
       console.error("[discord] notification failed:", (error as Error).message);
