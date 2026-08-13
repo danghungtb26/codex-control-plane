@@ -41,10 +41,11 @@ const reportPrNumber = (text: string) => {
   return Number.isInteger(value) && value > 0 ? value : undefined;
 };
 
+const isPrCreatingContext = (context: TurnContext) =>
+  context.kind === "issue" && (context.action === "implement" || context.action === "create-pr");
+
 const prTargetFrom = (finalText: string, context: TurnContext): GithubPrTarget | null => {
-  if (context.kind !== "issue" || (context.action !== "implement" && context.action !== "create-pr")) {
-    return null;
-  }
+  if (!isPrCreatingContext(context)) return null;
 
   const fromReport = reportPrNumber(finalText);
   const fromUrl = Number(finalText.match(PR_URL_RE)?.[1]);
@@ -56,6 +57,32 @@ const prTargetFrom = (finalText: string, context: TurnContext): GithubPrTarget |
 
   if (!number) return null;
   return { number, url: `https://github.com/${context.repo}/pull/${number}` };
+};
+
+const discoverCurrentBranchPr = async (context: TurnContext): Promise<GithubPrTarget | null> => {
+  if (!isPrCreatingContext(context)) return null;
+
+  try {
+    const { stdout } = await execFileAsync(
+      "gh",
+      ["pr", "view", "--repo", context.repo, "--json", "number,url,body"],
+      { cwd: context.cwd },
+    );
+    const pr = JSON.parse(stdout) as { number?: number; url?: string; body?: string | null };
+    const number = Number(pr.number);
+    const url = String(pr.url ?? "");
+    if (!Number.isInteger(number) || number <= 0 || !url) return null;
+
+    const closing = /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)/gi;
+    let match: RegExpExecArray | null;
+    while ((match = closing.exec(pr.body ?? ""))) {
+      if (Number(match[1]) === context.number) return { number, url };
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
 };
 
 const receiptMatchesPr = (receipt: GithubReportReceipt, target: GithubPrTarget) =>
@@ -114,6 +141,7 @@ const taskLabel = (context: Pick<TurnRunContext, "repo" | "kind" | "number" | "a
 
 export class TurnNotifier {
   private contexts = new Map<string, TurnContext>();
+  private prTargetsByThread = new Map<string, GithubPrTarget>();
 
   constructor(
     codex: CodexAppServerClient,
@@ -128,6 +156,11 @@ export class TurnNotifier {
 
   snapshotCommit(cwd: string) {
     return readGitHead(cwd);
+  }
+
+  associatePullRequest(threadId: string, prNumber: number, prUrl: string) {
+    if (!threadId || !Number.isInteger(prNumber) || prNumber <= 0 || !prUrl) return;
+    this.prTargetsByThread.set(threadId, { number: prNumber, url: prUrl });
   }
 
   register(turnId: string, context: TurnRegistration) {
@@ -230,11 +263,20 @@ export class TurnNotifier {
 
     const commitAfter = await readGitHead(context.cwd);
     const summary = summaryFrom(event.finalText, context, event.status);
-    const prTarget = prTargetFrom(event.finalText, context);
+    const discoveredPr = await discoverCurrentBranchPr(context);
+    const prTarget =
+      prTargetFrom(event.finalText, context) ??
+      this.prTargetsByThread.get(context.threadId) ??
+      discoveredPr ??
+      null;
+    if (prTarget) this.associatePullRequest(context.threadId, prTarget.number, prTarget.url);
 
     console.log(
       `[task] end status=${event.status} ${taskLabel(context)} turn=${event.turnId} commit=${context.commitBefore || "-"}->${commitAfter || "-"}`,
     );
+    if (discoveredPr && !prTargetFrom(event.finalText, context)) {
+      console.log(`[github] discovered completion PR ${context.repo}#${discoveredPr.number} from current branch`);
+    }
 
     try {
       await this.dashboard?.recordTurnCompleted({

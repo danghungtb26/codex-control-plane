@@ -9,7 +9,7 @@ import { DashboardStore } from "./dashboard-store.js";
 import { DiscordNotifier } from "./discord-notifier.js";
 import { ReviewDispatcher } from "./dispatcher.js";
 import { GithubBindingRegistry } from "./github-binding-registry.js";
-import { parseGithubEvent, verifyGithubSignature } from "./github-webhook.js";
+import { parseGithubEvent, parseGithubPullRequestOpened, verifyGithubSignature } from "./github-webhook.js";
 import { readBody, sendJson } from "./http-utils.js";
 import { TurnNotifier } from "./turn-notifier.js";
 
@@ -92,6 +92,38 @@ const handleGithubWebhook = async (req: Parameters<typeof readBody>[0], res: Par
   if (event === "ping") {
     console.log("[github] ping received");
     return sendJson(res, 200, { ok: true, pong: true });
+  }
+
+  const openedPr = parseGithubPullRequestOpened(event, payload, config);
+  if (openedPr) {
+    try {
+      const binding = await resolver.resolvePr(openedPr.repo, openedPr.number);
+      if (!binding) {
+        console.log(`[github] opened PR ${openedPr.repo}#${openedPr.number} is not linked to a Codex Issue thread`);
+        return sendJson(res, 200, { ok: true, ignored: true, reason: "unbound-pr" });
+      }
+
+      turnNotifier.associatePullRequest(binding.threadId, openedPr.number, openedPr.url);
+      try {
+        await discord.sendPullRequestCreated({
+          repo: openedPr.repo,
+          prNumber: openedPr.number,
+          prUrl: openedPr.url,
+          threadId: binding.threadId,
+          sourceIssueNumber: binding.sourceIssueNumber,
+        });
+      } catch (error) {
+        console.error("[discord] PR created notification failed:", (error as Error).message);
+      }
+
+      console.log(
+        `[github] linked opened PR ${openedPr.repo}#${openedPr.number} -> thread=${binding.threadId}${binding.sourceIssueNumber ? ` sourceIssue=#${binding.sourceIssueNumber}` : ""}`,
+      );
+      return sendJson(res, 200, { ok: true, prLinked: true, prNumber: openedPr.number });
+    } catch (error) {
+      console.error(`[github] opened PR handling failed for ${openedPr.repo}#${openedPr.number}:`, (error as Error).message);
+      return sendJson(res, 200, { ok: true, ignored: true, reason: "pr-link-failed" });
+    }
   }
 
   const message = parseGithubEvent(event, payload, config);
