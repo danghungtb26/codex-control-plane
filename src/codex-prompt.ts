@@ -31,6 +31,13 @@ const githubReportReceiptInstructions = [
   finalSummaryInstructions,
 ].join("\n");
 
+const githubPrReceiptInstructions = [
+  "After the pull request exists, your FINAL reply must also include these machine-readable PR receipt lines:",
+  "GITHUB_PR_NUMBER=<numeric pull request number>",
+  "GITHUB_PR_URL=<full GitHub pull request URL>",
+  "Get the real PR number/url from `gh` or the GitHub API; never invent them. Include these PR receipt lines whenever the PR exists, even if posting the completion comment fails.",
+].join("\n");
+
 export const withGithubCompletionComment = ({ repo, prNumber, task }: GithubCompletionPromptInput) =>
   [
     task.trim(),
@@ -53,6 +60,7 @@ export const withGithubIssueImplementation = ({ repo, issueNumber, task }: Githu
     "Push the implementation branch to the configured remote.",
     `Create or update exactly one pull request for this issue. The PR body must contain \`Closes #${issueNumber}\` so the control plane can inherit this same Codex thread for later fixes.`,
     "After the PR exists, post exactly one completion comment on that PR with completion/blocker status, concise summary, commit/branch information, files changed, tests/checks and results, and any remaining blocker/follow-up.",
+    githubPrReceiptInstructions,
     githubReportReceiptInstructions,
     "Do not merge the PR.",
     "If commit, push, PR creation, or GitHub commenting is blocked, report the exact blocker instead of claiming success.",
@@ -66,6 +74,7 @@ export const withGithubCreatePr = ({ repo, issueNumber, task }: GithubIssueTaskP
     "Inspect the current branch and working tree. Do not discard unrelated local changes. Ensure the intended implementation is committed; do not invent or rewrite work just to create the PR.",
     `Push the implementation branch, then create or update exactly one pull request for this issue. The PR body must contain \`Closes #${issueNumber}\` so the control plane can inherit the Issue thread.`,
     "After the PR exists, post exactly one completion comment on that PR with status, concise summary, commit/branch information, tests/checks already known, and any blocker/follow-up.",
+    githubPrReceiptInstructions,
     githubReportReceiptInstructions,
     "Do not merge the PR.",
   ].join("\n\n");
