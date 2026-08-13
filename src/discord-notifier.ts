@@ -27,6 +27,8 @@ type DiscordCompletionInput = DiscordNotificationTarget & {
   reportCommentId?: string;
   reportCommentUrl?: string;
   reportFallback?: boolean;
+  prNumber?: number;
+  prUrl?: string;
 };
 
 const iconFor = (status: string) => {
@@ -122,7 +124,10 @@ export class DiscordNotifier {
   async sendCompletion(input: DiscordCompletionInput) {
     if (!this.webhookUrl) return false;
 
-    const { label, githubUrl } = targetDetails(input);
+    const prUrl = input.prUrl ?? (input.prNumber ? `https://github.com/${input.repo}/pull/${input.prNumber}` : undefined);
+    const { label, githubUrl } = input.prNumber
+      ? { label: `PR #${input.prNumber}`, githubUrl: prUrl as string }
+      : targetDetails(input);
     const before = shortSha(input.commitBefore);
     const after = shortSha(input.commitAfter);
     const commitLine = before === after ? `Commit: \`${after}\` (unchanged)` : `Commit: \`${before}\` → \`${after}\``;
@@ -145,7 +150,7 @@ export class DiscordNotifier {
       `Thread: \`${input.threadId}\``,
       `Turn: \`${input.turnId}\``,
       ...reportLines,
-      githubUrl,
+      prUrl ? `Pull request: ${prUrl}` : githubUrl,
     ]
       .filter(Boolean)
       .join("\n");
