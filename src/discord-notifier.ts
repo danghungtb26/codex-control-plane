@@ -31,6 +31,14 @@ type DiscordCompletionInput = DiscordNotificationTarget & {
   prUrl?: string;
 };
 
+type DiscordPullRequestCreatedInput = {
+  repo: string;
+  prNumber: number;
+  prUrl: string;
+  threadId: string;
+  sourceIssueNumber?: number;
+};
+
 const iconFor = (status: string) => {
   const normalized = status.toLowerCase();
   if (normalized === "completed") return "✅";
@@ -114,6 +122,22 @@ export class DiscordNotifier {
       `Commit: \`${shortSha(input.commitBefore)}\``,
       `Thread: \`${input.threadId}\``,
       githubUrl,
+    ]
+      .filter(Boolean)
+      .join("\n");
+
+    return this.post(content);
+  }
+
+  async sendPullRequestCreated(input: DiscordPullRequestCreatedInput) {
+    if (!this.webhookUrl) return false;
+
+    const content = [
+      "🔀 **Codex pull request created**",
+      `**${input.repo} · PR #${input.prNumber}**`,
+      input.sourceIssueNumber ? `Source: Issue #${input.sourceIssueNumber}` : "",
+      `Thread: \`${input.threadId}\``,
+      `Pull request: ${input.prUrl}`,
     ]
       .filter(Boolean)
       .join("\n");
