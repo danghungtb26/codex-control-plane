@@ -114,6 +114,7 @@ const taskLabel = (context: Pick<TurnRunContext, "repo" | "kind" | "number" | "a
 
 export class TurnNotifier {
   private contexts = new Map<string, TurnContext>();
+  private prTargetsByThread = new Map<string, GithubPrTarget>();
 
   constructor(
     codex: CodexAppServerClient,
@@ -128,6 +129,11 @@ export class TurnNotifier {
 
   snapshotCommit(cwd: string) {
     return readGitHead(cwd);
+  }
+
+  associatePullRequest(threadId: string, prNumber: number, prUrl: string) {
+    if (!threadId || !Number.isInteger(prNumber) || prNumber <= 0 || !prUrl) return;
+    this.prTargetsByThread.set(threadId, { number: prNumber, url: prUrl });
   }
 
   register(turnId: string, context: TurnRegistration) {
@@ -230,7 +236,7 @@ export class TurnNotifier {
 
     const commitAfter = await readGitHead(context.cwd);
     const summary = summaryFrom(event.finalText, context, event.status);
-    const prTarget = prTargetFrom(event.finalText, context);
+    const prTarget = prTargetFrom(event.finalText, context) ?? this.prTargetsByThread.get(context.threadId) ?? null;
 
     console.log(
       `[task] end status=${event.status} ${taskLabel(context)} turn=${event.turnId} commit=${context.commitBefore || "-"}->${commitAfter || "-"}`,
