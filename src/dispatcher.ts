@@ -6,6 +6,7 @@ import {
   withGithubCreatePr,
   withGithubIssueImplementation,
   withGithubSummary,
+  withRepositoryTaskWorkflow,
 } from "./codex-prompt.js";
 import type { Config } from "./config.js";
 import type { TurnNotifier } from "./turn-notifier.js";
@@ -313,15 +314,21 @@ export class ReviewDispatcher {
       return `Requested fix ${index + 1}:\n${message.text || "Inspect the referenced review comment/thread and fix it."}${source}`;
     });
 
-    const task = [
-      `You are continuing work on GitHub PR ${first.repo}#${first.number}.`,
-      "The trusted user explicitly invoked `/codex:fix-comment`. Only now should review feedback be acted on.",
-      ...sections,
-      "If the command itself does not contain a concrete finding, inspect the PR's current review comments/threads and identify the actionable feedback that the command is authorizing you to fix.",
-      "Inspect the current working tree first so you do not overwrite unrelated changes. Apply only the relevant fixes and run the most relevant tests/checks.",
-      "If the fix changes files, create a real git commit containing the task-related changes and push it to the existing PR branch before reporting completion. Do not create an empty commit when no code change is required.",
-      "Do not merge the PR.",
-    ].join("\n\n");
+    const task = withRepositoryTaskWorkflow(
+      [
+        `You are continuing work on GitHub PR ${first.repo}#${first.number} in its durable implementation conversation.`,
+        "The trusted user explicitly invoked `/codex:fix-comment`. Only now should review feedback be acted on.",
+        ...sections,
+        "PR-review fix workflow:",
+        "Treat the authorized review feedback as the source requirement for this turn. Preserve the existing PR scope and branch; do not create a new PR for the fix.",
+        "If the command itself does not contain a concrete finding, inspect the PR's current review comments/threads and identify the actionable feedback that the command is authorizing you to fix.",
+        "Use the repository's top-level task workflow for this fix. The main agent must inspect and arbitrate the requested feedback, approve the repair scope, delegate implementation when appropriate, review the resulting diff, then run independent QA before deciding PASS.",
+        "Inspect the current working tree first so you do not overwrite unrelated changes. Apply only the relevant accepted fixes and run the repository-required tests/checks/QA.",
+        "Do not treat the reviewer comment as automatically correct if it conflicts with repository requirements or the approved task scope; the main agent must resolve that conflict explicitly before changing code.",
+        "If the main agent decides PASS and the fix changes files, create a real git commit containing only the task-related changes and push it to the existing PR branch before reporting completion. Do not create an empty commit when no code change is required.",
+        "Do not merge the PR.",
+      ].join("\n\n"),
+    );
 
     const prompt = withRecoveryContext(
       withGithubCompletionComment({
