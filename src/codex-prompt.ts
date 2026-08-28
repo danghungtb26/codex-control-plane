@@ -38,6 +38,18 @@ const githubPrReceiptInstructions = [
   "Get the real PR number/url from `gh` or the GitHub API; never invent them. Include these PR receipt lines whenever the PR exists, even if posting the completion comment fails.",
 ].join("\n");
 
+export const withRepositoryTaskWorkflow = (task: string) =>
+  [
+    task.trim(),
+    "Repository autonomous-workflow requirement:",
+    "Before changing files, inspect the repository's AGENTS.md/instructions and available task/workflow skills.",
+    "If `game-task-workflow` exists or repository policy declares it as the top-level workflow, you MUST explicitly use `game-task-workflow` as the main-agent control plane before any specialist skill. Do not bypass it by invoking `game-godot`, `game-ui-pipeline`, `game-asset-pipeline`, `gdd-designer`, `plan-writer`, or `game-runtime-audit` directly as the top-level workflow.",
+    "The current durable Codex conversation is the main agent. Keep orchestration, plan approval, implementation-diff review, QA arbitration, repair decisions, final PASS/BLOCKED, and publishing authority in the main conversation. Subagent output is evidence, not authority.",
+    "When the repository workflow supports delegation, use bounded subagent runs for implementation and independent QA. Implementation and QA must be logically separate; main-agent review happens before QA; QA reports findings rather than silently repairing them; the main agent decides whether findings are accepted, rejected, or need more evidence before delegating repairs.",
+    "Do not let a specialist worker or implementer self-certify task completion. Publish only after the main agent has completed the repository-required review/QA gates and decided PASS.",
+    "If this repository does not define `game-task-workflow`, follow its own top-level repository workflow and authority rules instead of inventing a missing skill.",
+  ].join("\n\n");
+
 export const withGithubCompletionComment = ({ repo, prNumber, task }: GithubCompletionPromptInput) =>
   [
     task.trim(),
@@ -52,11 +64,12 @@ export const withGithubCompletionComment = ({ repo, prNumber, task }: GithubComp
 export const withGithubIssueImplementation = ({ repo, issueNumber, task }: GithubIssueTaskPromptInput) =>
   [
     `You are implementing GitHub issue ${repo}#${issueNumber} in its durable Codex conversation.`,
-    task.trim(),
-    "Implementation workflow:",
+    withRepositoryTaskWorkflow(task),
+    "Issue implementation workflow:",
     "Inspect the issue requirements, repository, and existing working tree first. Do not overwrite or discard unrelated local changes.",
-    `Use a dedicated branch for issue #${issueNumber}. Implement the task with minimal maintainable scope and run the most relevant focused tests plus the broader suite when practical.`,
-    "When implementation changes are ready, create a real git commit containing the task-related changes. Do not create an empty commit when there are no changes.",
+    `Use a dedicated branch for issue #${issueNumber}. Implement the task with minimal maintainable scope and run the repository-required focused tests, independent QA, and broader checks when applicable.`,
+    "Do not publish merely because an implementation worker says it is done. Complete the main-agent review and repository-required QA/arbitration/repair loop first.",
+    "After the main agent decides PASS, create a real git commit containing the task-related changes. Do not create an empty commit when there are no changes.",
     "Push the implementation branch to the configured remote.",
     `Create or update exactly one pull request for this issue. The PR body must contain \`Closes #${issueNumber}\` so the control plane can inherit this same Codex thread for later fixes.`,
     "After the PR exists, post exactly one completion comment on that PR with completion/blocker status, concise summary, commit/branch information, files changed, tests/checks and results, and any remaining blocker/follow-up.",
